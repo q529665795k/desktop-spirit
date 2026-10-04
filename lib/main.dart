@@ -29,10 +29,17 @@ const List<String> kTaunts = [
 
 void main() {
   WidgetsFlutterBinding.ensureInitialized();
+  runApp(const DesktopSpiritApp());
+}
+
+/// 悬浮窗独立入口(0.5.x 要求:悬浮窗 UI 由 overlayMain 承载,showOverlay 不传 Widget)
+@pragma('vm:entry-point')
+void overlayMain() {
+  WidgetsFlutterBinding.ensureInitialized();
   runApp(
-    const OverlayInitializer(
-      overlay: SpiritOverlay(),
-      child: DesktopSpiritApp(),
+    const MaterialApp(
+      debugShowCheckedModeBanner: false,
+      home: SpiritOverlay(),
     ),
   );
 }
@@ -85,24 +92,32 @@ class _HomePageState extends State<HomePage> {
     if (!_permission) {
       final ok = await FlutterOverlayWindow.requestPermission();
       if (!mounted) return;
-      setState(() => _permission = ok);
-      if (!ok) {
-        setState(() => _status = '权限被拒绝,请在系统设置里手动打开"显示在其他应用上层"');
+      if (ok != true) {
+        setState(() {
+          _permission = false;
+          _status = '权限被拒绝,请在系统设置里手动打开"显示在其他应用上层"';
+        });
         return;
       }
-      setState(() => _status = '悬浮窗权限:已授权');
+      setState(() {
+        _permission = true;
+        _status = '悬浮窗权限:已授权';
+      });
     }
     await FlutterOverlayWindow.showOverlay(
+      height: 220,
+      width: 180,
       overlayTitle: '桌面灵宠',
       overlayContent: '灵宠悬浮窗',
       flag: OverlayFlag.defaultFlag,
+      enableDrag: true,
     );
     if (!mounted) return;
     setState(() => _overlayVisible = true);
   }
 
   Future<void> _stop() async {
-    await FlutterOverlayWindow.hideOverlay();
+    await FlutterOverlayWindow.closeOverlay();
     if (!mounted) return;
     setState(() => _overlayVisible = false);
   }
@@ -203,7 +218,7 @@ class _EggWidgetState extends State<EggWidget>
   }
 }
 
-/// 悬浮窗:一颗可拖动、点击冒泡的蛋
+/// 悬浮窗:一颗会呼吸、点击冒泡的蛋(拖动由原生 enableDrag 接管)
 class SpiritOverlay extends StatefulWidget {
   const SpiritOverlay({super.key});
 
@@ -213,7 +228,6 @@ class SpiritOverlay extends StatefulWidget {
 
 class _SpiritOverlayState extends State<SpiritOverlay>
     with SingleTickerProviderStateMixin {
-  Offset _dragOffset = Offset.zero;
   String? _bubble;
   Timer? _bubbleTimer;
 
@@ -247,23 +261,22 @@ class _SpiritOverlayState extends State<SpiritOverlay>
       color: Colors.transparent,
       child: LayoutBuilder(
         builder: (context, constraints) {
-          final center = Offset(constraints.maxWidth / 2, constraints.maxHeight / 2);
+          final center = Offset(
+            constraints.maxWidth / 2,
+            constraints.maxHeight / 2,
+          );
           return Stack(
             children: [
-              Positioned.fill(
-                child: GestureDetector(
-                  onPanUpdate: (d) =>
-                      setState(() => _dragOffset += d.delta),
-                  behavior: HitTestBehavior.translucent,
-                ),
-              ),
-              // 气泡
+              // 气泡(显示在蛋上方)
               if (_bubble != null)
                 Positioned(
-                  left: center.dx + _dragOffset.dx - 70,
-                  top: center.dy + _dragOffset.dy - 170,
+                  left: center.dx - 70,
+                  top: center.dy - 170,
                   child: Container(
-                    padding: const EdgeInsets.symmetric(horizontal: 14, vertical: 8),
+                    padding: const EdgeInsets.symmetric(
+                      horizontal: 14,
+                      vertical: 8,
+                    ),
                     decoration: BoxDecoration(
                       color: Colors.white,
                       borderRadius: BorderRadius.circular(16),
@@ -273,25 +286,29 @@ class _SpiritOverlayState extends State<SpiritOverlay>
                     ),
                     child: Text(
                       _bubble!,
-                      style: const TextStyle(fontSize: 14, color: Colors.black87),
+                      style: const TextStyle(
+                        fontSize: 14,
+                        color: Colors.black87,
+                      ),
                     ),
                   ),
                 ),
-              // 蛋(可拖动)
+              // 蛋(点击冒泡;整个悬浮窗拖动由原生 enableDrag 处理)
               Positioned(
-                left: center.dx + _dragOffset.dx - 65,
-                top: center.dy + _dragOffset.dy - 80,
+                left: center.dx - 65,
+                top: center.dy - 80,
                 child: GestureDetector(
                   onTap: _onTap,
-                  onPanUpdate: (d) =>
-                      setState(() => _dragOffset += d.delta),
                   child: AnimatedBuilder(
                     animation: _anim,
                     builder: (context, child) {
                       final t = _anim.value;
                       return Transform.translate(
                         offset: Offset(0, -t * 8),
-                        child: Transform.scale(scale: 1 + t * 0.04, child: child),
+                        child: Transform.scale(
+                          scale: 1 + t * 0.04,
+                          child: child,
+                        ),
                       );
                     },
                     child: Container(
@@ -315,7 +332,11 @@ class _SpiritOverlayState extends State<SpiritOverlay>
                         ],
                       ),
                       alignment: Alignment.center,
-                      child: const Icon(Icons.egg, size: 96, color: Color(0xFFFFF8F0)),
+                      child: const Icon(
+                        Icons.egg,
+                        size: 96,
+                        color: Color(0xFFFFF8F0),
+                      ),
                     ),
                   ),
                 ),
