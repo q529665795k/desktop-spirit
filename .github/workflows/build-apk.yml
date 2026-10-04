@@ -34,11 +34,15 @@ jobs:
           if 'SYSTEM_ALERT_WINDOW' not in s:
               s = s.replace('<application', perms + '    <application', 1)
           services = ('        <service\n'
-                      '            android:name="id.flutter.flutter_overlay_window.OverlayService"\n'
-                      '            android:permission="android.permission.SYSTEM_ALERT_WINDOW"\n'
-                      '            android:exported="false" />\n'
+                      '            android:name="flutter.overlay.window.flutter_overlay_window.OverlayService"\n'
+                      '            android:exported="false"\n'
+                      '            android:foregroundServiceType="specialUse">\n'
+                      '            <property\n'
+                      '                android:name="android.app.PROPERTY_SPECIAL_USE_FGS_SUBTYPE"\n'
+                      '                android:value="desktop spirit pet overlay" />\n'
+                      '        </service>\n'
                       '        <service\n'
-                      '            android:name="id.flutter.flutter_overlay_window.OverlayForegroundService"\n'
+                      '            android:name="flutter.overlay.window.flutter_overlay_window.OverlayForegroundService"\n'
                       '            android:exported="false" />\n')
           if 'OverlayService' not in s:
               s = s.replace('</application>', services + '    </application>', 1)
