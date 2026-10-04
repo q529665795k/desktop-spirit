@@ -22,6 +22,32 @@ jobs:
       - name: Create Android platform skeleton
         run: flutter create . --platforms=android --org com.marvis --project-name desktop_spirit
 
+      - name: Patch AndroidManifest for overlay window
+        run: |
+          python3 - <<'EOF'
+          p = 'android/app/src/main/AndroidManifest.xml'
+          s = open(p).read()
+          perms = '''    <uses-permission android:name="android.permission.SYSTEM_ALERT_WINDOW" />
+        <uses-permission android:name="android.permission.FOREGROUND_SERVICE" />
+        <uses-permission android:name="android.permission.FOREGROUND_SERVICE_SPECIAL_USE" />
+        <uses-permission android:name="android.permission.POST_NOTIFICATIONS" />
+'''
+          if 'SYSTEM_ALERT_WINDOW' not in s:
+              s = s.replace('<application', perms + '    <application', 1)
+          services = '''        <service
+            android:name="id.flutter.flutter_overlay_window.OverlayService"
+            android:permission="android.permission.SYSTEM_ALERT_WINDOW"
+            android:exported="false" />
+        <service
+            android:name="id.flutter.flutter_overlay_window.OverlayForegroundService"
+            android:exported="false" />
+'''
+          if 'OverlayService' not in s:
+              s = s.replace('</application>', services + '    </application>', 1)
+          open(p, 'w').write(s)
+          print('manifest patched')
+          EOF
+
       - name: Get packages
         run: flutter pub get
 
