@@ -19,3 +19,8 @@
 ## 打包
 
 每次 push 到 main 自动触发 Actions,APK 产物在 Actions 页面 Artifacts 下载。
+
+## Step 2
+- 悬浮窗蛋形态(占位动画)
+- 可拖动、点击吐槽气泡
+- 权限申请引导
