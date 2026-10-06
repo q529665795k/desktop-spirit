@@ -4,11 +4,12 @@ import 'dart:math' as math;
 import 'package:flutter/material.dart';
 import 'package:flutter_overlay_window/flutter_overlay_window.dart';
 import 'package:shared_preferences/shared_preferences.dart';
+import 'package:flutter_tts/flutter_tts.dart';
 
 /// 品牌署名
 const String kBrand = '摸鱼基地出品';
 const String kAppName = '桌面灵宠';
-const String kVersion = 'v0.3.0';
+const String kVersion = 'v0.6.0';
 
 /// 预置吐槽短句(第5步会接系统 TTS 语音)
 const List<String> kTaunts = [
@@ -47,6 +48,49 @@ const List<String> kSpiritTaunts = [
   '我闻到了好吃的!',
   '陪我看会儿天空呗',
 ];
+
+/// 食物定义(第4步)
+class Food {
+  const Food(this.emoji, this.name, this.satiety, this.mood);
+  final String emoji;
+  final String name;
+  final int satiety;
+  final int mood;
+}
+
+const List<Food> kFoods = [
+  Food('🍎', '苹果', 25, 5),
+  Food('🐟', '小鱼干', 35, 8),
+  Food('🍬', '糖果', 15, 3),
+];
+
+/// TTS 语音吐槽(第5步,系统文字转语音,零素材)
+class SpiritTts {
+  static FlutterTts? _tts;
+  static bool _ready = false;
+
+  static Future<void> ensure() async {
+    if (_tts != null) return;
+    try {
+      _tts = FlutterTts();
+      await _tts!.setLanguage('zh-CN');
+      await _tts!.setSpeechRate(0.5);
+      await _tts!.setVolume(1.0);
+      _ready = true;
+    } catch (_) {
+      _ready = false;
+    }
+  }
+
+  static Future<void> speak(String text) async {
+    await ensure();
+    if (!_ready) return;
+    try {
+      await _tts!.stop();
+      await _tts!.speak(text);
+    } catch (_) {}
+  }
+}
 
 void main() {
   WidgetsFlutterBinding.ensureInitialized();
@@ -100,6 +144,53 @@ class DesktopSpiritApp extends StatelessWidget {
   }
 }
 
+/// 第4-6步共享状态:饱腹度/心情/喂食次数/进化/最后互动时间(SharedPreferences 持久化)
+class SpiritState {
+  static const String kSatiety = 'satiety';
+  static const String kMood = 'mood';
+  static const String kFeedCount = 'feed_count';
+  static const String kEvo = 'evo';
+  static const String kLastInteract = 'last_interact';
+
+  static int satiety = 80;
+  static int mood = 80;
+  static int feedCount = 0;
+  static bool evo = false;
+  static DateTime lastInteract = DateTime.now();
+
+  static Future<void> load() async {
+    final p = await SharedPreferences.getInstance();
+    satiety = p.getInt(kSatiety) ?? 80;
+    mood = p.getInt(kMood) ?? 80;
+    feedCount = p.getInt(kFeedCount) ?? 0;
+    evo = p.getBool(kEvo) ?? false;
+    final ts = p.getInt(kLastInteract);
+    lastInteract = ts != null
+        ? DateTime.fromMillisecondsSinceEpoch(ts)
+        : DateTime.now();
+  }
+
+  static Future<void> save() async {
+    final p = await SharedPreferences.getInstance();
+    await p.setInt(kSatiety, satiety);
+    await p.setInt(kMood, mood);
+    await p.setInt(kFeedCount, feedCount);
+    await p.setBool(kEvo, evo);
+    await p.setInt(kLastInteract, lastInteract.millisecondsSinceEpoch);
+  }
+
+  static void touch() {
+    lastInteract = DateTime.now();
+  }
+
+  /// 每 30 秒衰减 1 点
+  static void decay() {
+    if (satiety > 5) satiety--;
+    if (mood > 10) mood--;
+  }
+}
+
+
 class HomePage extends StatefulWidget {
   const HomePage({super.key});
 
@@ -119,6 +210,9 @@ class _HomePageState extends State<HomePage> {
     super.initState();
     _checkPermission();
     _loadPhase();
+    SpiritState.load().then((_) {
+      if (mounted) setState(() {});
+    });
   }
 
   Future<void> _loadPhase() async {
@@ -140,21 +234,26 @@ class _HomePageState extends State<HomePage> {
   }
 
   Future<void> _start() async {
-    if (!_permission) {
-      final ok = await FlutterOverlayWindow.requestPermission();
-      if (!mounted) return;
-      if (ok != true) {
-        setState(() {
-          _permission = false;
-          _status = '权限被拒绝,请在系统设置里手动打开"显示在其他应用上层"';
-        });
-        return;
-      }
-      setState(() {
-        _permission = true;
-        _status = '悬浮窗权限:已授权';
-      });
+    // 每次实查系统真实授权状态(MIUI 上 requestPermission 返回值不可信)
+    var granted = await FlutterOverlayWindow.isPermissionGranted();
+    if (!granted) {
+      await FlutterOverlayWindow.requestPermission();
+      granted = await FlutterOverlayWindow.isPermissionGranted();
     }
+    if (!granted) {
+      if (!mounted) return;
+      setState(() {
+        _permission = false;
+        _status = '未授权:请到 设置 → 应用 → 桌面灵宠 → 显示在其他应用上层 → 允许;小米记得把"后台弹出界面"也打开';
+      });
+      _showPermissionGuide();
+      return;
+    }
+    if (!mounted) return;
+    setState(() {
+      _permission = true;
+      _status = '悬浮窗权限:已授权';
+    });
     await FlutterOverlayWindow.showOverlay(
       height: 240,
       width: 200,
@@ -177,6 +276,87 @@ class _HomePageState extends State<HomePage> {
     setState(() => _phase = SpiritPhase.spirit);
     SpiritStore.save(SpiritPhase.spirit);
   }
+
+  Widget _buildStats() {
+    return Column(
+      mainAxisSize: MainAxisSize.min,
+      children: [
+        Row(
+          mainAxisSize: MainAxisSize.min,
+          children: [
+            Text('🍽️ 饱腹度 ${SpiritState.satiety}/100', style: const TextStyle(fontSize: 12)),
+            const SizedBox(width: 10),
+            Text('😊 心情 ${SpiritState.mood}/100', style: const TextStyle(fontSize: 12)),
+          ],
+        ),
+        const SizedBox(height: 4),
+        if (SpiritState.evo)
+          const Text('✨ 已进化完全体', style: TextStyle(fontSize: 12, color: Color(0xFFB8860B)))
+        else
+          Text('进化进度:喂食 ${SpiritState.feedCount}/10 次', style: const TextStyle(fontSize: 12, color: Colors.grey)),
+      ],
+    );
+  }
+
+  Widget _buildFoodRow() {
+    return Row(
+      mainAxisSize: MainAxisSize.min,
+      children: [
+        for (final f in kFoods)
+          Padding(
+            padding: const EdgeInsets.symmetric(horizontal: 4),
+            child: FilledButton.tonal(
+              onPressed: () => _feedFromHome(f),
+              child: Text('${f.emoji} ${f.name}'),
+            ),
+          ),
+      ],
+    );
+  }
+
+  Future<void> _feedFromHome(Food food) async {
+    SpiritState.touch();
+    SpiritState.satiety = math.min(100, SpiritState.satiety + food.satiety);
+    SpiritState.mood = math.min(100, SpiritState.mood + food.mood);
+    SpiritState.feedCount++;
+    await SpiritState.save();
+    if (!mounted) return;
+    setState(() {});
+    SpiritTts.speak('${food.name}好好吃呀,谢谢主人');
+    if (!SpiritState.evo && SpiritState.feedCount >= 10) {
+      setState(() => SpiritState.evo = true);
+      await SpiritState.save();
+      ScaffoldMessenger.of(context).showSnackBar(
+        const SnackBar(content: Text('✨ 进化啦!完全体形态 ✨')),
+      );
+    } else {
+      ScaffoldMessenger.of(context).showSnackBar(
+        SnackBar(
+          content: Text('喂了${food.name},饱腹度+${food.satiety}'),
+          duration: const Duration(milliseconds: 800),
+        ),
+      );
+    }
+  }
+
+  void _showPermissionGuide() {
+    showDialog<void>(
+      context: context,
+      builder: (context) => AlertDialog(
+        title: const Text('悬浮窗权限还没开'),
+        content: const Text(
+          '小米/红米手机:设置 → 应用设置 → 应用管理 → 桌面灵宠 → 权限管理 → 显示在其他应用上层 → 允许;'
+          '同时打开「后台弹出界面」,否则悬浮窗开不起来。
+
+授权后回来再点一次「开始悬浮窗」就行。',
+        ),
+        actions: [
+          TextButton(onPressed: () => Navigator.pop(context), child: const Text('知道了')),
+        ],
+      ),
+    );
+  }
+
 
   void _showAbout() {
     showDialog<void>(
@@ -264,6 +444,10 @@ class _HomePageState extends State<HomePage> {
             ),
             const SizedBox(height: 20),
             Text(_status, style: theme.textTheme.bodySmall),
+            const SizedBox(height: 12),
+            _buildStats(),
+            const SizedBox(height: 8),
+            _buildFoodRow(),
             const SizedBox(height: 16),
             FilledButton.icon(
               onPressed: _start,
@@ -304,11 +488,15 @@ class SpiritAvatar extends StatefulWidget {
     required this.phase,
     this.size = 150,
     this.onHatchComplete,
+    this.evo = false,
+    this.sleep = false,
   });
 
   final SpiritPhase phase;
   final double size;
   final VoidCallback? onHatchComplete;
+  final bool evo;
+  final bool sleep;
 
   @override
   State<SpiritAvatar> createState() => _SpiritAvatarState();
@@ -368,7 +556,7 @@ class _SpiritAvatarState extends State<SpiritAvatar>
               child: SizedBox(
                 width: s,
                 height: s * 1.15,
-                child: CustomPaint(painter: _SpiritPainter(blink: blink)),
+                child: CustomPaint(painter: _SpiritPainter(blink: widget.sleep ? 0 : blink, isEvo: widget.evo)),
               ),
             ),
           );
@@ -422,7 +610,7 @@ class _SpiritAvatarState extends State<SpiritAvatar>
                     child: SizedBox(
                       width: s,
                       height: s * 1.15,
-                      child: CustomPaint(painter: _SpiritPainter(blink: 1.0)),
+                      child: CustomPaint(painter: _SpiritPainter(blink: 1.0, isEvo: widget.evo)),
                     ),
                   ),
                 ),
@@ -514,8 +702,9 @@ class _EggPainter extends CustomPainter {
 
 /// 小精灵占位绘制:银发狐耳少女(呼吸眨眼)
 class _SpiritPainter extends CustomPainter {
-  const _SpiritPainter({required this.blink});
+  const _SpiritPainter({required this.blink, this.isEvo = false});
   final double blink; // 1=睁眼 0=闭眼
+  final bool isEvo; // 完全体:金色光环+翅膀
 
   @override
   void paint(Canvas canvas, Size size) {
@@ -523,6 +712,35 @@ class _SpiritPainter extends CustomPainter {
     final h = size.height;
     final cx = w / 2;
     final cy = h / 2 + h * 0.05;
+
+    // 完全体装饰:金色光环 + 双翼(进化后)
+    if (isEvo) {
+      final halo = Paint()
+        ..color = const Color(0xFFFFD54F)
+        ..style = PaintingStyle.stroke
+        ..strokeWidth = 4;
+      canvas.drawOval(
+        Rect.fromCenter(
+          center: Offset(cx, cy - h * 0.32),
+          width: w * 0.52,
+          height: h * 0.26,
+        ),
+        halo,
+      );
+      final wingL = Paint()..color = const Color(0xFF9C8ADF);
+      final wingPathL = Path()
+        ..moveTo(cx - w * 0.30, cy + h * 0.12)
+        ..quadraticBezierTo(cx - w * 0.52, cy - h * 0.02, cx - w * 0.40, cy - h * 0.16)
+        ..quadraticBezierTo(cx - w * 0.28, cy - h * 0.02, cx - w * 0.24, cy + h * 0.05)
+        ..close();
+      canvas.drawPath(wingPathL, wingL);
+      final wingR = Path()
+        ..moveTo(cx + w * 0.30, cy + h * 0.12)
+        ..quadraticBezierTo(cx + w * 0.52, cy - h * 0.02, cx + w * 0.40, cy - h * 0.16)
+        ..quadraticBezierTo(cx + w * 0.28, cy - h * 0.02, cx + w * 0.24, cy + h * 0.05)
+        ..close();
+      canvas.drawPath(wingR, wingL);
+    }
 
     // 尾巴(身后)
     final tail = Paint()..color = const Color(0xFFC9B8F5);
@@ -650,10 +868,11 @@ class _SpiritPainter extends CustomPainter {
   }
 
   @override
-  bool shouldRepaint(covariant _SpiritPainter old) => old.blink != blink;
+  bool shouldRepaint(covariant _SpiritPainter old) =>
+      old.blink != blink || old.isEvo != isEvo;
 }
 
-/// 悬浮窗:蛋/小精灵 + 点击冒泡(拖动由原生 enableDrag 接管)
+/// 悬浮窗:蛋/小精灵 + 喂食/摸头/睡觉/吐槽(拖动由原生 enableDrag 接管)
 class SpiritOverlay extends StatefulWidget {
   const SpiritOverlay({super.key});
 
@@ -665,32 +884,145 @@ class _SpiritOverlayState extends State<SpiritOverlay>
     with SingleTickerProviderStateMixin {
   String? _bubble;
   Timer? _bubbleTimer;
+  Timer? _decayTimer;
+  Timer? _boredTimer;
   SpiritPhase _phase = SpiritPhase.egg;
+  bool _loaded = false;
+  bool _evolving = false;
+  bool _sleeping = false;
 
   @override
   void initState() {
     super.initState();
-    _loadPhase();
+    _init();
   }
 
-  Future<void> _loadPhase() async {
+  Future<void> _init() async {
     final ph = await SpiritStore.load();
+    await SpiritState.load();
     if (!mounted) return;
-    setState(() => _phase = ph);
+    setState(() {
+      _phase = ph;
+      _loaded = true;
+    });
+    _checkSleep();
+    _decayTimer = Timer.periodic(const Duration(seconds: 30), (_) => _onDecay());
+    _boredTimer = Timer.periodic(const Duration(seconds: 60), (_) => _onBored());
   }
 
   @override
   void dispose() {
     _bubbleTimer?.cancel();
+    _decayTimer?.cancel();
+    _boredTimer?.cancel();
     super.dispose();
   }
 
+  void _checkSleep() {
+    final idle = DateTime.now().difference(SpiritState.lastInteract).inSeconds;
+    final shouldSleep = idle > 90;
+    if (_sleeping == shouldSleep) return;
+    _sleeping = shouldSleep;
+    if (!mounted) return;
+    setState(() {
+      if (_sleeping) {
+        _bubble = '💤 Zzz…';
+      } else {
+        _bubble = null;
+      }
+    });
+  }
+
+  void _onDecay() {
+    SpiritState.decay();
+    SpiritState.save();
+    _checkSleep();
+    if (!mounted) return;
+    if (SpiritState.satiety < 30) {
+      _bubbleTimer?.cancel();
+      setState(() => _bubble = '🍽️ 我饿啦!快喂我~');
+      _bubbleTimer = Timer(const Duration(seconds: 4), () {
+        if (mounted) setState(() => _bubble = null);
+      });
+    }
+    setState(() {});
+  }
+
+  void _onBored() {
+    if (!_loaded || _sleeping) return;
+    final idle = DateTime.now().difference(SpiritState.lastInteract).inSeconds;
+    if (idle < 60) return;
+    SpiritState.touch();
+    final pool = _phase == SpiritPhase.spirit ? kSpiritTaunts : kTaunts;
+    final text = pool[_randomInt(pool.length)];
+    if (!mounted) return;
+    _bubbleTimer?.cancel();
+    setState(() => _bubble = text);
+    _bubbleTimer = Timer(const Duration(seconds: 3), () {
+      if (mounted) setState(() => _bubble = null);
+    });
+    SpiritTts.speak(text);
+  }
+
   void _onTap() {
+    SpiritState.touch();
+    if (_sleeping) {
+      _sleeping = false;
+    }
     _bubbleTimer?.cancel();
     final pool = _phase == SpiritPhase.spirit ? kSpiritTaunts : kTaunts;
-    setState(() {
-      _bubble = pool[_randomInt(pool.length)];
+    final text = pool[_randomInt(pool.length)];
+    setState(() => _bubble = text);
+    _bubbleTimer = Timer(const Duration(seconds: 3), () {
+      if (mounted) setState(() => _bubble = null);
     });
+    SpiritTts.speak(text);
+  }
+
+  Future<void> _pet() async {
+    SpiritState.touch();
+    SpiritState.mood = math.min(100, SpiritState.mood + 10);
+    await SpiritState.save();
+    if (!mounted) return;
+    _bubbleTimer?.cancel();
+    setState(() => _bubble = '💗 摸摸头~心情+10');
+    _bubbleTimer = Timer(const Duration(seconds: 3), () {
+      if (mounted) setState(() => _bubble = null);
+    });
+    SpiritTts.speak('好舒服呀,再摸摸');
+  }
+
+  Future<void> _feed(Food food) async {
+    SpiritState.touch();
+    SpiritState.satiety = math.min(100, SpiritState.satiety + food.satiety);
+    SpiritState.mood = math.min(100, SpiritState.mood + food.mood);
+    SpiritState.feedCount++;
+    await SpiritState.save();
+    if (!mounted) return;
+    _bubbleTimer?.cancel();
+    setState(() => _bubble = '${food.emoji} 好好吃~(+${food.satiety})');
+    _bubbleTimer = Timer(const Duration(seconds: 3), () {
+      if (mounted) setState(() => _bubble = null);
+    });
+    SpiritTts.speak('${food.name}好好吃呀,谢谢主人');
+    if (!SpiritState.evo && SpiritState.feedCount >= 10) {
+      await _evolve();
+    }
+  }
+
+  Future<void> _evolve() async {
+    SpiritState.evo = true;
+    await SpiritState.save();
+    if (!mounted) return;
+    _bubbleTimer?.cancel();
+    setState(() {
+      _evolving = true;
+      _bubble = '✨ 进化啦!完全体 ✨';
+    });
+    SpiritTts.speak('哇,我进化啦!');
+    await Future.delayed(const Duration(milliseconds: 1800));
+    if (!mounted) return;
+    setState(() => _evolving = false);
     _bubbleTimer = Timer(const Duration(seconds: 3), () {
       if (mounted) setState(() => _bubble = null);
     });
@@ -699,15 +1031,73 @@ class _SpiritOverlayState extends State<SpiritOverlay>
   void _onHatchComplete() {
     setState(() => _phase = SpiritPhase.spirit);
     SpiritStore.save(SpiritPhase.spirit);
-    // 破壳完成给小精灵一句台词
     _bubbleTimer?.cancel();
     setState(() => _bubble = kSpiritTaunts.first);
     _bubbleTimer = Timer(const Duration(seconds: 3), () {
       if (mounted) setState(() => _bubble = null);
     });
+    SpiritTts.speak(kSpiritTaunts.first);
   }
 
   int _randomInt(int max) => DateTime.now().millisecondsSinceEpoch % max;
+
+  Widget _foodBtn(Food f, double s) {
+    return GestureDetector(
+      onTap: () => _feed(f),
+      child: Container(
+        width: s,
+        height: s,
+        margin: const EdgeInsets.symmetric(horizontal: 3),
+        alignment: Alignment.center,
+        decoration: BoxDecoration(
+          color: Colors.white.withOpacity(0.9),
+          shape: BoxShape.circle,
+          border: Border.all(color: Colors.black12),
+        ),
+        child: Text(f.emoji, style: TextStyle(fontSize: s * 0.62)),
+      ),
+    );
+  }
+
+  Widget _petBtn(double s) {
+    return GestureDetector(
+      onTap: _pet,
+      child: Container(
+        width: s,
+        height: s,
+        margin: const EdgeInsets.symmetric(horizontal: 3),
+        alignment: Alignment.center,
+        decoration: BoxDecoration(
+          color: Colors.white.withOpacity(0.9),
+          shape: BoxShape.circle,
+          border: Border.all(color: Colors.black12),
+        ),
+        child: Text('💗', style: TextStyle(fontSize: s * 0.62)),
+      ),
+    );
+  }
+
+  Widget _statBar(String icon, int value, Color color) {
+    return Expanded(
+      child: Row(
+        children: [
+          Text(icon, style: const TextStyle(fontSize: 9)),
+          const SizedBox(width: 2),
+          Expanded(
+            child: ClipRRect(
+              borderRadius: BorderRadius.circular(3),
+              child: LinearProgressIndicator(
+                value: (value / 100).clamp(0.0, 1.0),
+                minHeight: 5,
+                backgroundColor: Colors.white70,
+                valueColor: AlwaysStoppedAnimation<Color>(color),
+              ),
+            ),
+          ),
+        ],
+      ),
+    );
+  }
 
   @override
   Widget build(BuildContext context) {
@@ -718,10 +1108,27 @@ class _SpiritOverlayState extends State<SpiritOverlay>
           final w = constraints.maxWidth;
           final h = constraints.maxHeight;
           final center = Offset(w / 2, h / 2);
-          final size = math.min(w * 0.62, h * 0.62);
+          final size = math.min(w * 0.56, h * 0.52);
+          final btnSize = 26.0;
+          final foodTop = center.dy + size * 0.72;
           return Stack(
             children: [
-              // 气泡(显示在灵宠上方)
+              // 进化闪光
+              if (_evolving)
+                Positioned.fill(
+                  child: IgnorePointer(
+                    child: Container(
+                      decoration: BoxDecoration(
+                        shape: BoxShape.circle,
+                        color: Colors.white.withOpacity(0.85),
+                        boxShadow: const [
+                          BoxShadow(color: Colors.amberAccent, blurRadius: 32),
+                        ],
+                      ),
+                    ),
+                  ),
+                ),
+              // 气泡
               if (_bubble != null)
                 Positioned(
                   left: center.dx - 70,
@@ -741,24 +1148,50 @@ class _SpiritOverlayState extends State<SpiritOverlay>
                     ),
                     child: Text(
                       _bubble!,
-                      style: const TextStyle(
-                        fontSize: 13,
-                        color: Colors.black87,
-                      ),
+                      style: const TextStyle(fontSize: 13, color: Colors.black87),
                     ),
                   ),
                 ),
-              // 灵宠(点击冒泡/破壳)
+              // 灵宠
               Positioned(
                 left: center.dx - size / 2,
                 top: center.dy - size * 0.62,
                 child: GestureDetector(
                   onTap: _onTap,
+                  onLongPress: _pet,
                   child: SpiritAvatar(
                     phase: _phase,
                     size: size,
+                    evo: SpiritState.evo,
+                    sleep: _sleeping,
                     onHatchComplete: _onHatchComplete,
                   ),
+                ),
+              ),
+              // 饱腹度/心情细条
+              Positioned(
+                left: center.dx - 70,
+                top: foodTop - 16,
+                child: SizedBox(
+                  width: 140,
+                  child: Row(
+                    children: [
+                      _statBar('🍽️', SpiritState.satiety, const Color(0xFFFF9800)),
+                      const SizedBox(width: 6),
+                      _statBar('😊', SpiritState.mood, const Color(0xFFE91E63)),
+                    ],
+                  ),
+                ),
+              ),
+              // 底部按钮:3种食物 + 摸头
+              Positioned(
+                left: center.dx - 70,
+                top: foodTop,
+                child: Row(
+                  children: [
+                    for (final f in kFoods) _foodBtn(f, btnSize),
+                    _petBtn(btnSize),
+                  ],
                 ),
               ),
             ],
