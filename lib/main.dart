@@ -10,7 +10,7 @@ import 'package:flutter_tts/flutter_tts.dart';
 /// 品牌署名
 const String kBrand = '摸鱼基地出品';
 const String kAppName = '桌面灵宠';
-const String kVersion = 'v0.7.1';
+const String kVersion = 'v0.7.2';
 
 /// 预置吐槽短句(第5步会接系统 TTS 语音)
 const List<String> kTaunts = [
@@ -66,6 +66,7 @@ const List<Food> kFoods = [
 ];
 
 /// TTS 语音吐槽(第5步,系统文字转语音,零素材)
+/// v0.7.2:语速 / 男女声由 SpiritConfig 设置驱动
 class SpiritTts {
   static FlutterTts? _tts;
   static bool _ready = false;
@@ -75,7 +76,6 @@ class SpiritTts {
     try {
       _tts = FlutterTts();
       await _tts!.setLanguage('zh-CN');
-      await _tts!.setSpeechRate(0.5);
       await _tts!.setVolume(1.0);
       _ready = true;
     } catch (_) {
@@ -83,10 +83,30 @@ class SpiritTts {
     }
   }
 
+  /// 应用用户设置的语速 / 男女声
+  /// 女声靠高音调、男声靠低音调实现(不依赖引擎声音库,小米/Google TTS 都通用)
+  static Future<void> applySettings() async {
+    if (_tts == null) return;
+    try {
+      await _tts!.setSpeechRate(SpiritConfig.ttsRate.clamp(0.3, 1.0));
+      switch (SpiritConfig.ttsVoice) {
+        case 'male':
+          await _tts!.setPitch(0.6);
+          break;
+        case 'female':
+          await _tts!.setPitch(1.3);
+          break;
+        default:
+          await _tts!.setPitch(1.0);
+      }
+    } catch (_) {}
+  }
+
   static Future<void> speak(String text) async {
     await ensure();
     if (!_ready) return;
     try {
+      await applySettings();
       await _tts!.stop();
       await _tts!.speak(text);
     } catch (_) {}
@@ -157,6 +177,8 @@ class SpiritConfig {
   static const String kOpacity = 'overlay_opacity';
   static const String kAutoHide = 'auto_hide_enabled';
   static const String kAutoHideDelay = 'auto_hide_delay';
+  static const String kTtsRate = 'tts_rate';
+  static const String kTtsVoice = 'tts_voice';
 
   /// 悬浮窗透明度 0.4 ~ 1.0
   static double opacity = 1.0;
@@ -167,11 +189,22 @@ class SpiritConfig {
   /// 闲置多少秒后自动缩到角落(10~120)
   static int autoHideDelay = 20;
 
+  /// TTS 语速 0.3 ~ 1.0
+  static double ttsRate = 0.5;
+
+  /// TTS 音色:female(女声) / male(男声) / default(系统默认)
+  static String ttsVoice = 'female';
+
   static Future<void> load() async {
     final p = await SharedPreferences.getInstance();
     opacity = (p.getDouble(kOpacity) ?? 1.0).clamp(0.4, 1.0);
     autoHide = p.getBool(kAutoHide) ?? true;
     autoHideDelay = p.getInt(kAutoHideDelay) ?? 20;
+    ttsRate = (p.getDouble(kTtsRate) ?? 0.5).clamp(0.3, 1.0);
+    ttsVoice = p.getString(kTtsVoice) ?? 'female';
+    if (ttsVoice != 'female' && ttsVoice != 'male' && ttsVoice != 'default') {
+      ttsVoice = 'female';
+    }
   }
 
   static Future<void> save() async {
@@ -179,6 +212,8 @@ class SpiritConfig {
     await p.setDouble(kOpacity, opacity);
     await p.setBool(kAutoHide, autoHide);
     await p.setInt(kAutoHideDelay, autoHideDelay);
+    await p.setDouble(kTtsRate, ttsRate);
+    await p.setString(kTtsVoice, ttsVoice);
   }
 }
 
@@ -263,6 +298,8 @@ class _HomePageState extends State<HomePage> {
   double _opacity = 1.0;
   bool _autoHide = true;
   int _autoHideDelay = 20;
+  double _ttsRate = 0.5;
+  String _ttsVoice = 'female';
 
   @override
   void initState() {
@@ -278,6 +315,8 @@ class _HomePageState extends State<HomePage> {
         _opacity = SpiritConfig.opacity;
         _autoHide = SpiritConfig.autoHide;
         _autoHideDelay = SpiritConfig.autoHideDelay;
+        _ttsRate = SpiritConfig.ttsRate;
+        _ttsVoice = SpiritConfig.ttsVoice;
       });
     });
   }
@@ -382,6 +421,27 @@ class _HomePageState extends State<HomePage> {
     await SpiritConfig.save();
     if (!mounted) return;
     setState(() => _autoHideDelay = v.round());
+  }
+
+  Future<void> _updateTtsRate(double v) async {
+    SpiritConfig.ttsRate = v;
+    await SpiritConfig.save();
+    await SpiritTts.applySettings();
+    if (!mounted) return;
+    setState(() => _ttsRate = v);
+  }
+
+  Future<void> _updateTtsVoice(String v) async {
+    SpiritConfig.ttsVoice = v;
+    await SpiritConfig.save();
+    await SpiritTts.applySettings();
+    if (!mounted) return;
+    setState(() => _ttsVoice = v);
+  }
+
+  /// 试听当前 TTS 设置效果
+  void _testTts() {
+    SpiritTts.speak('主人,我是小狐耳,这是我的新声音');
   }
 
   Widget _buildStats() {
@@ -618,6 +678,73 @@ class _HomePageState extends State<HomePage> {
                           ],
                         ),
                       ],
+                    ],
+                  ),
+                ),
+              ),
+              const SizedBox(height: 16),
+              // v0.7.2:TTS 语音设置(语速 + 男女声)
+              Card(
+                margin: EdgeInsets.zero,
+                child: Padding(
+                  padding: const EdgeInsets.all(14),
+                  child: Column(
+                    mainAxisSize: MainAxisSize.min,
+                    crossAxisAlignment: CrossAxisAlignment.start,
+                    children: [
+                      Row(
+                        children: [
+                          const Icon(Icons.record_voice_over, size: 16, color: Colors.grey),
+                          const SizedBox(width: 6),
+                          Text('语音设置', style: theme.textTheme.titleSmall),
+                        ],
+                      ),
+                      const SizedBox(height: 12),
+                      Row(
+                        children: [
+                          const Text('语速', style: TextStyle(fontSize: 13)),
+                          Expanded(
+                            child: Slider(
+                              value: _ttsRate,
+                              min: 0.3,
+                              max: 1.0,
+                              divisions: 7,
+                              label: _ttsRate < 0.45 ? '慢' : (_ttsRate < 0.8 ? '标准' : '快'),
+                              onChanged: (v) => _updateTtsRate(v),
+                            ),
+                          ),
+                          Text(
+                            _ttsRate < 0.45 ? '慢' : (_ttsRate < 0.8 ? '标准' : '快'),
+                            style: const TextStyle(fontSize: 12, color: Colors.grey),
+                          ),
+                        ],
+                      ),
+                      const SizedBox(height: 4),
+                      Row(
+                        children: [
+                          const Text('声音', style: TextStyle(fontSize: 13)),
+                          const Spacer(),
+                          SegmentedButton<String>(
+                            segments: const [
+                              ButtonSegment(value: 'female', label: Text('女声')),
+                              ButtonSegment(value: 'male', label: Text('男声')),
+                              ButtonSegment(value: 'default', label: Text('默认')),
+                            ],
+                            selected: {_ttsVoice},
+                            onSelectionChanged: (s) => _updateTtsVoice(s.first),
+                            showSelectedIcon: false,
+                          ),
+                        ],
+                      ),
+                      const SizedBox(height: 8),
+                      Align(
+                        alignment: Alignment.centerRight,
+                        child: TextButton.icon(
+                          onPressed: _testTts,
+                          icon: const Icon(Icons.volume_up, size: 16),
+                          label: const Text('试听一下'),
+                        ),
+                      ),
                     ],
                   ),
                 ),
