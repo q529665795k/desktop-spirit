@@ -34,11 +34,6 @@ jobs:
 '''
           if 'SYSTEM_ALERT_WINDOW' not in s:
               s = s.replace('<application', perms + '    <application', 1)
-          # 桌面图标显示中文名"桌面灵宠"(flutter create 默认 android:label=desktop_spirit)
-          import re
-          s = re.sub(r'android:label="[^"]*"', 'android:label="桌面灵宠"', s)
-          if 'android:label=' not in s:
-              s = s.replace('<application', '<application android:label="桌面灵宠"', 1)
           services = '''        <service
             android:name="id.flutter.flutter_overlay_window.OverlayService"
             android:permission="android.permission.SYSTEM_ALERT_WINDOW"
