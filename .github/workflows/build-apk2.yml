@@ -48,6 +48,16 @@ jobs:
       - name: Get packages
         run: flutter pub get
 
+      - name: Diagnose asset bundling
+        run: |
+          flutter build bundle --release 2>&1 | tail -30
+          echo "=== flutter_assets content ==="
+          find build/flutter_assets -type f 2>/dev/null | head -80
+          echo "=== AssetManifest.json ==="
+          cat build/flutter_assets/AssetManifest.json 2>/dev/null | head -30
+          echo "=== pubspec flutter section ==="
+          sed -n '/^flutter:/,/^[a-z]/p' pubspec.yaml
+
       - name: Build APK
         run: flutter build apk --release
 
