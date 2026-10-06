@@ -1084,7 +1084,7 @@ class _SpiritOverlayState extends State<SpiritOverlay>
       }
     } catch (_) {}
     if (op != null && mounted) {
-      setState(() => SpiritConfig.opacity = op.clamp(0.4, 1.0));
+      setState(() => SpiritConfig.opacity = (op ?? 1.0).clamp(0.4, 1.0).toDouble());
     }
   }
 
@@ -1114,7 +1114,7 @@ class _SpiritOverlayState extends State<SpiritOverlay>
     _bubbleTimer = Timer(const Duration(seconds: 3), () {
       if (mounted) setState(() => _bubble = null);
     });
-    await FlutterOverlayWindow.resizeOverlay(_miniW.toInt(), _miniH.toInt());
+    await FlutterOverlayWindow.resizeOverlay(_miniW.toInt(), _miniH.toInt(), true);
     await FlutterOverlayWindow.moveOverlay(const OverlayPosition(0, 160));
   }
 
@@ -1124,7 +1124,7 @@ class _SpiritOverlayState extends State<SpiritOverlay>
     _panelOpen = false;
     _bubble = null;
     setState(() {});
-    await FlutterOverlayWindow.resizeOverlay(_bigW.toInt(), _bigH.toInt());
+    await FlutterOverlayWindow.resizeOverlay(_bigW.toInt(), _bigH.toInt(), true);
     await FlutterOverlayWindow.moveOverlay(const OverlayPosition(60, 180));
     _resetAutoHide();
   }
