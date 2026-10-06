@@ -346,9 +346,7 @@ class _HomePageState extends State<HomePage> {
         title: const Text('悬浮窗权限还没开'),
         content: const Text(
           '小米/红米手机:设置 → 应用设置 → 应用管理 → 桌面灵宠 → 权限管理 → 显示在其他应用上层 → 允许;'
-          '同时打开「后台弹出界面」,否则悬浮窗开不起来。
-
-授权后回来再点一次「开始悬浮窗」就行。',
+          '同时打开「后台弹出界面」,否则悬浮窗开不起来。\n\n授权后回来再点一次「开始悬浮窗」就行。',
         ),
         actions: [
           TextButton(onPressed: () => Navigator.pop(context), child: const Text('知道了')),
