@@ -10,7 +10,7 @@ import 'package:flutter_tts/flutter_tts.dart';
 /// 品牌署名
 const String kBrand = '摸鱼基地出品';
 const String kAppName = '桌面灵宠';
-const String kVersion = 'v0.7.0';
+const String kVersion = 'v0.7.1';
 
 /// 预置吐槽短句(第5步会接系统 TTS 语音)
 const List<String> kTaunts = [
@@ -115,6 +115,10 @@ enum SpiritPhase { egg, spirit }
 
 class SpiritStore {
   static const String _kPhase = 'spirit_phase';
+  static const String _kHatchReadyAt = 'hatch_ready_at';
+
+  /// 首次打开后 5 分钟才能破壳(孵化倒计时)
+  static DateTime? hatchReadyAt;
 
   static Future<SpiritPhase> load() async {
     final p = await SharedPreferences.getInstance();
@@ -125,6 +129,26 @@ class SpiritStore {
   static Future<void> save(SpiritPhase phase) async {
     final p = await SharedPreferences.getInstance();
     await p.setString(_kPhase, phase == SpiritPhase.spirit ? 'spirit' : 'egg');
+  }
+
+  /// 初始化孵化时间:首次打开记录 now+5 分钟,之后一直沿用
+  static Future<void> ensureHatchTimer() async {
+    if (hatchReadyAt != null) return;
+    final p = await SharedPreferences.getInstance();
+    final ts = p.getInt(_kHatchReadyAt);
+    if (ts != null) {
+      hatchReadyAt = DateTime.fromMillisecondsSinceEpoch(ts);
+    } else {
+      hatchReadyAt = DateTime.now().add(const Duration(minutes: 5));
+      await p.setInt(_kHatchReadyAt, hatchReadyAt!.millisecondsSinceEpoch);
+    }
+  }
+
+  /// 距可破壳还有多少秒(0 表示可以破壳)
+  static int remainingSeconds() {
+    if (hatchReadyAt == null) return 0;
+    final diff = hatchReadyAt!.difference(DateTime.now()).inSeconds;
+    return diff > 0 ? diff : 0;
   }
 }
 
@@ -259,6 +283,8 @@ class _HomePageState extends State<HomePage> {
   }
 
   Future<void> _loadPhase() async {
+    // 首次打开:记录孵化倒计时(5 分钟),之后一直沿用
+    await SpiritStore.ensureHatchTimer();
     final ph = await SpiritStore.load();
     if (!mounted) return;
     setState(() {
@@ -319,6 +345,19 @@ class _HomePageState extends State<HomePage> {
   void _onHatchComplete() {
     setState(() => _phase = SpiritPhase.spirit);
     SpiritStore.save(SpiritPhase.spirit);
+  }
+
+  /// 破壳被 5 分钟倒计时拦下时提示剩余时间
+  void _onHatchBlocked() {
+    final sec = SpiritStore.remainingSeconds();
+    final m = sec ~/ 60;
+    final s = sec % 60;
+    ScaffoldMessenger.of(context).showSnackBar(
+      SnackBar(
+        content: Text('⏳ 蛋还在孵化中… ${m}分${s}秒后可破壳'),
+        duration: const Duration(seconds: 2),
+      ),
+    );
   }
 
   Future<void> _updateOpacity(double v) async {
@@ -463,8 +502,6 @@ class _HomePageState extends State<HomePage> {
             const Text('初中文化,没上过培训班,全靠自己折腾', style: TextStyle(fontSize: 11, color: Colors.grey)),
             const SizedBox(height: 2),
             const Text('一台手机+云电脑+GitHub,零成本做出这个小东西', style: TextStyle(fontSize: 11, color: Colors.grey)),
-            const SizedBox(height: 2),
-            const Text('不图名不图利,能让你会心一笑就够了', style: TextStyle(fontSize: 11, color: Colors.grey)),
             const SizedBox(height: 10),
             const Text('纯原创 · 自用 · 不上架 · 不商用', style: TextStyle(fontSize: 12, color: Colors.grey)),
             const SizedBox(height: 8),
@@ -493,6 +530,7 @@ class _HomePageState extends State<HomePage> {
                 phase: _phase,
                 size: 150,
                 onHatchComplete: _onHatchComplete,
+                onHatchBlocked: _onHatchBlocked,
               ),
               const SizedBox(height: 16),
               Text(kAppName, style: theme.textTheme.headlineMedium),
@@ -603,7 +641,7 @@ class _HomePageState extends State<HomePage> {
               const SizedBox(height: 16),
               Text(
                 '小提示:悬浮窗开启后回桌面就能看到灵宠,可拖动;闲置会自动缩到左上角露小头,点一下恢复。'
-                'v0.7.0 交互:单击灵宠=摸头,双击=戳肚子吐槽,长按=呼出喂食/隐藏面板。',
+                'v0.7.1 交互:单击灵宠=摸头,双击=戳肚子吐槽,长按=呼出喂食/隐藏面板。',
                 style: theme.textTheme.bodySmall?.copyWith(color: Colors.grey),
                 textAlign: TextAlign.center,
               ),
@@ -623,6 +661,7 @@ class SpiritAvatar extends StatefulWidget {
     required this.phase,
     this.size = 150,
     this.onHatchComplete,
+    this.onHatchBlocked,
     this.evo = false,
     this.sleep = false,
   });
@@ -630,6 +669,9 @@ class SpiritAvatar extends StatefulWidget {
   final SpiritPhase phase;
   final double size;
   final VoidCallback? onHatchComplete;
+
+  /// 点击破壳但 5 分钟孵化倒计时未到
+  final VoidCallback? onHatchBlocked;
   final bool evo;
   final bool sleep;
 
@@ -661,6 +703,12 @@ class _SpiritAvatarState extends State<SpiritAvatar>
 
   void _startHatch() {
     if (_hatching) return;
+    // 5 分钟孵化倒计时未到:不给破壳,通知上层提示
+    final remain = SpiritStore.remainingSeconds();
+    if (remain > 0) {
+      widget.onHatchBlocked?.call();
+      return;
+    }
     setState(() => _hatching = true);
     _hatch.forward(from: 0).whenComplete(() {
       if (!mounted) return;
@@ -1046,6 +1094,8 @@ class _SpiritOverlayState extends State<SpiritOverlay>
   }
 
   Future<void> _init() async {
+    // 与主 App 共用同一孵化倒计时
+    await SpiritStore.ensureHatchTimer();
     final ph = await SpiritStore.load();
     await SpiritState.load();
     await SpiritConfig.load();
@@ -1260,6 +1310,27 @@ class _SpiritOverlayState extends State<SpiritOverlay>
     SpiritTts.speak(kSpiritTaunts.first);
   }
 
+  /// 悬浮窗里点蛋:先过 5 分钟孵化倒计时
+  void _onEggTap() {
+    if (SpiritStore.remainingSeconds() > 0) {
+      _onHatchBlocked();
+      return;
+    }
+    _onHatchComplete();
+  }
+
+  /// 孵化未到时间:气泡提示剩余时间
+  void _onHatchBlocked() {
+    final sec = SpiritStore.remainingSeconds();
+    final m = sec ~/ 60;
+    final s = sec % 60;
+    _bubbleTimer?.cancel();
+    setState(() => _bubble = '⏳ 还在孵化… ${m}分${s}秒后可破壳');
+    _bubbleTimer = Timer(const Duration(seconds: 3), () {
+      if (mounted) setState(() => _bubble = null);
+    });
+  }
+
   /// 长按:呼出操作面板(喂食+隐藏),4 秒自动收起
   void _openPanel() {
     if (_phase != SpiritPhase.spirit) return;
@@ -1409,7 +1480,7 @@ class _SpiritOverlayState extends State<SpiritOverlay>
                   left: center.dx - size / 2,
                   top: center.dy - size * 0.62,
                   child: GestureDetector(
-                    onTap: _phase == SpiritPhase.egg ? _onHatchComplete : _pet,
+                    onTap: _phase == SpiritPhase.egg ? _onEggTap : _pet,
                     onDoubleTap: _phase == SpiritPhase.egg ? null : _onTap,
                     onLongPress: _phase == SpiritPhase.egg ? null : _openPanel,
                     child: SpiritAvatar(
@@ -1418,6 +1489,7 @@ class _SpiritOverlayState extends State<SpiritOverlay>
                       evo: SpiritState.evo,
                       sleep: _sleeping,
                       onHatchComplete: _onHatchComplete,
+                      onHatchBlocked: _onHatchBlocked,
                     ),
                   ),
                 ),
