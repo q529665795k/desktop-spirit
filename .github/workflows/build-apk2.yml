@@ -22,6 +22,14 @@ jobs:
       - name: Create Android platform skeleton
         run: flutter create . --platforms=android --org com.marvis --project-name desktop_spirit
 
+      - name: Restore pubspec assets declaration
+        run: |
+          git checkout -- pubspec.yaml || true
+          echo "=== pubspec.yaml (after restore) ==="
+          cat pubspec.yaml
+          echo "=== assets png count ==="
+          find assets -name "*.png" | wc -l
+
       - name: Patch AndroidManifest for overlay window
         run: |
           python3 - <<'PYEOF'
