@@ -27,20 +27,26 @@ jobs:
           python3 - <<'EOF'
           p = 'android/app/src/main/AndroidManifest.xml'
           s = open(p).read()
-          perms = ('    <uses-permission android:name="android.permission.SYSTEM_ALERT_WINDOW" />\n'
-                   '        <uses-permission android:name="android.permission.FOREGROUND_SERVICE" />\n'
-                   '        <uses-permission android:name="android.permission.FOREGROUND_SERVICE_SPECIAL_USE" />\n'
-                   '        <uses-permission android:name="android.permission.POST_NOTIFICATIONS" />\n')
+          perms = '''    <uses-permission android:name="android.permission.SYSTEM_ALERT_WINDOW" />
+        <uses-permission android:name="android.permission.FOREGROUND_SERVICE" />
+        <uses-permission android:name="android.permission.FOREGROUND_SERVICE_SPECIAL_USE" />
+        <uses-permission android:name="android.permission.POST_NOTIFICATIONS" />
+'''
           if 'SYSTEM_ALERT_WINDOW' not in s:
               s = s.replace('<application', perms + '    <application', 1)
-          services = ('        <service\n'
-                      '            android:name="flutter.overlay.window.flutter_overlay_window.OverlayService"\n'
-                      '            android:exported="false"\n'
-                      '            android:foregroundServiceType="specialUse">\n'
-                      '            <property\n'
-                      '                android:name="android.app.PROPERTY_SPECIAL_USE_FGS_SUBTYPE"\n'
-                      '                android:value="desktop spirit pet overlay" />\n'
-                      '        </service>\n')
+          # 桌面图标显示中文名"桌面灵宠"(flutter create 默认 android:label=desktop_spirit)
+          import re
+          s = re.sub(r'android:label="[^"]*"', 'android:label="桌面灵宠"', s)
+          if 'android:label=' not in s:
+              s = s.replace('<application', '<application android:label="桌面灵宠"', 1)
+          services = '''        <service
+            android:name="id.flutter.flutter_overlay_window.OverlayService"
+            android:permission="android.permission.SYSTEM_ALERT_WINDOW"
+            android:exported="false" />
+        <service
+            android:name="id.flutter.flutter_overlay_window.OverlayForegroundService"
+            android:exported="false" />
+'''
           if 'OverlayService' not in s:
               s = s.replace('</application>', services + '    </application>', 1)
           open(p, 'w').write(s)
@@ -58,4 +64,3 @@ jobs:
         with:
           name: desktop-spirit-apk
           path: build/app/outputs/flutter-apk/app-release.apk
-
