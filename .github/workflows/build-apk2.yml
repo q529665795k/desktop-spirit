@@ -50,13 +50,19 @@ jobs:
 
       - name: Diagnose asset bundling
         run: |
-          flutter build bundle --release 2>&1 | tail -30
-          echo "=== flutter_assets content ==="
+          pip install -q pyyaml
+          python3 - <<'PY'
+          import yaml
+          p = yaml.safe_load(open('pubspec.yaml'))
+          fl = p.get('flutter', {})
+          print('flutter keys:', list(fl.keys()))
+          print('assets:', fl.get('assets'))
+          PY
+          flutter build bundle --release --verbose 2>&1 | grep -iE "asset|target|exception|error" | head -120
+          echo "=== flutter_assets ==="
           find build/flutter_assets -type f 2>/dev/null | head -80
           echo "=== AssetManifest.json ==="
-          cat build/flutter_assets/AssetManifest.json 2>/dev/null | head -30
-          echo "=== pubspec flutter section ==="
-          sed -n '/^flutter:/,/^[a-z]/p' pubspec.yaml
+          cat build/flutter_assets/AssetManifest.json 2>/dev/null | head -5
 
       - name: Build APK
         run: flutter build apk --release
