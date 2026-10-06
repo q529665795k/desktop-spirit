@@ -1,4 +1,5 @@
 import 'dart:async';
+import 'dart:convert';
 import 'dart:math' as math;
 
 import 'package:flutter/material.dart';
@@ -9,7 +10,7 @@ import 'package:flutter_tts/flutter_tts.dart';
 /// 品牌署名
 const String kBrand = '摸鱼基地出品';
 const String kAppName = '桌面灵宠';
-const String kVersion = 'v0.6.0';
+const String kVersion = 'v0.7.0';
 
 /// 预置吐槽短句(第5步会接系统 TTS 语音)
 const List<String> kTaunts = [
@@ -127,6 +128,36 @@ class SpiritStore {
   }
 }
 
+/// 悬浮窗设置:透明度 / 自动贴边隐藏(SharedPreferences 持久化,主 App 与悬浮窗共用)
+class SpiritConfig {
+  static const String kOpacity = 'overlay_opacity';
+  static const String kAutoHide = 'auto_hide_enabled';
+  static const String kAutoHideDelay = 'auto_hide_delay';
+
+  /// 悬浮窗透明度 0.4 ~ 1.0
+  static double opacity = 1.0;
+
+  /// 是否启用闲置自动贴边缩头
+  static bool autoHide = true;
+
+  /// 闲置多少秒后自动缩到角落(10~120)
+  static int autoHideDelay = 20;
+
+  static Future<void> load() async {
+    final p = await SharedPreferences.getInstance();
+    opacity = (p.getDouble(kOpacity) ?? 1.0).clamp(0.4, 1.0);
+    autoHide = p.getBool(kAutoHide) ?? true;
+    autoHideDelay = p.getInt(kAutoHideDelay) ?? 20;
+  }
+
+  static Future<void> save() async {
+    final p = await SharedPreferences.getInstance();
+    await p.setDouble(kOpacity, opacity);
+    await p.setBool(kAutoHide, autoHide);
+    await p.setInt(kAutoHideDelay, autoHideDelay);
+  }
+}
+
 class DesktopSpiritApp extends StatelessWidget {
   const DesktopSpiritApp({super.key});
 
@@ -205,6 +236,10 @@ class _HomePageState extends State<HomePage> {
   SpiritPhase _phase = SpiritPhase.egg;
   bool _loaded = false;
 
+  double _opacity = 1.0;
+  bool _autoHide = true;
+  int _autoHideDelay = 20;
+
   @override
   void initState() {
     super.initState();
@@ -212,6 +247,14 @@ class _HomePageState extends State<HomePage> {
     _loadPhase();
     SpiritState.load().then((_) {
       if (mounted) setState(() {});
+    });
+    SpiritConfig.load().then((_) {
+      if (!mounted) return;
+      setState(() {
+        _opacity = SpiritConfig.opacity;
+        _autoHide = SpiritConfig.autoHide;
+        _autoHideDelay = SpiritConfig.autoHideDelay;
+      });
     });
   }
 
@@ -261,6 +304,7 @@ class _HomePageState extends State<HomePage> {
       overlayContent: '灵宠悬浮窗',
       flag: OverlayFlag.defaultFlag,
       enableDrag: true,
+      positionGravity: PositionGravity.auto,
     );
     if (!mounted) return;
     setState(() => _overlayVisible = true);
@@ -275,6 +319,30 @@ class _HomePageState extends State<HomePage> {
   void _onHatchComplete() {
     setState(() => _phase = SpiritPhase.spirit);
     SpiritStore.save(SpiritPhase.spirit);
+  }
+
+  Future<void> _updateOpacity(double v) async {
+    SpiritConfig.opacity = v;
+    await SpiritConfig.save();
+    try {
+      await FlutterOverlayWindow.shareData(jsonEncode({'opacity': v}));
+    } catch (_) {}
+    if (!mounted) return;
+    setState(() => _opacity = v);
+  }
+
+  Future<void> _updateAutoHide(bool v) async {
+    SpiritConfig.autoHide = v;
+    await SpiritConfig.save();
+    if (!mounted) return;
+    setState(() => _autoHide = v);
+  }
+
+  Future<void> _updateAutoHideDelay(double v) async {
+    SpiritConfig.autoHideDelay = v.round();
+    await SpiritConfig.save();
+    if (!mounted) return;
+    setState(() => _autoHideDelay = v.round());
   }
 
   Widget _buildStats() {
@@ -415,63 +483,132 @@ class _HomePageState extends State<HomePage> {
     final theme = Theme.of(context);
     return Scaffold(
       body: Center(
-        child: Column(
-          mainAxisSize: MainAxisSize.min,
-          children: [
-            // 灵宠形象(蛋或小精灵,点击破壳)
-            SpiritAvatar(
-              phase: _phase,
-              size: 150,
-              onHatchComplete: _onHatchComplete,
-            ),
-            const SizedBox(height: 16),
-            Text(kAppName, style: theme.textTheme.headlineMedium),
-            const SizedBox(height: 4),
-            Text(
-              _phase == SpiritPhase.egg ? '一颗蛋正在孵化中…' : '小狐耳已经破壳啦!',
-              style: theme.textTheme.bodyMedium,
-            ),
-            const SizedBox(height: 6),
-            Row(
-              mainAxisSize: MainAxisSize.min,
-              children: [
-                const Icon(Icons.copyright, size: 14, color: Colors.grey),
-                const SizedBox(width: 4),
-                Text(kBrand, style: theme.textTheme.bodySmall?.copyWith(color: Colors.grey)),
-              ],
-            ),
-            const SizedBox(height: 20),
-            Text(_status, style: theme.textTheme.bodySmall),
-            const SizedBox(height: 12),
-            _buildStats(),
-            const SizedBox(height: 8),
-            _buildFoodRow(),
-            const SizedBox(height: 16),
-            FilledButton.icon(
-              onPressed: _start,
-              icon: const Icon(Icons.pets),
-              label: Text(_overlayVisible ? '悬浮窗已开启,再次点击' : '开始悬浮窗'),
-            ),
-            if (_overlayVisible) ...[
+        child: SingleChildScrollView(
+          padding: const EdgeInsets.symmetric(vertical: 24, horizontal: 16),
+          child: Column(
+            mainAxisSize: MainAxisSize.min,
+            children: [
+              // 灵宠形象(蛋或小精灵,点击破壳)
+              SpiritAvatar(
+                phase: _phase,
+                size: 150,
+                onHatchComplete: _onHatchComplete,
+              ),
+              const SizedBox(height: 16),
+              Text(kAppName, style: theme.textTheme.headlineMedium),
+              const SizedBox(height: 4),
+              Text(
+                _phase == SpiritPhase.egg ? '一颗蛋正在孵化中…' : '小狐耳已经破壳啦!',
+                style: theme.textTheme.bodyMedium,
+              ),
+              const SizedBox(height: 6),
+              Row(
+                mainAxisSize: MainAxisSize.min,
+                children: [
+                  const Icon(Icons.copyright, size: 14, color: Colors.grey),
+                  const SizedBox(width: 4),
+                  Text(kBrand, style: theme.textTheme.bodySmall?.copyWith(color: Colors.grey)),
+                ],
+              ),
+              const SizedBox(height: 20),
+              Text(_status, style: theme.textTheme.bodySmall),
+              const SizedBox(height: 12),
+              _buildStats(),
               const SizedBox(height: 8),
-              TextButton(onPressed: _stop, child: const Text('关闭悬浮窗')),
-            ],
-            const SizedBox(height: 12),
-            TextButton.icon(
-              onPressed: _showAbout,
-              icon: const Icon(Icons.info_outline, size: 18),
-              label: const Text('关于 · 摸鱼基地出品'),
-            ),
-            const SizedBox(height: 16),
-            Padding(
-              padding: const EdgeInsets.symmetric(horizontal: 32),
-              child: Text(
-                '小提示:悬浮窗开启后回桌面就能看到灵宠,可以拖动;蛋形态点它会吐槽,再点一次触发破壳!',
+              _buildFoodRow(),
+              const SizedBox(height: 16),
+              // v0.7.0:悬浮窗设置(透明化 + 自动贴边)
+              Card(
+                margin: EdgeInsets.zero,
+                child: Padding(
+                  padding: const EdgeInsets.all(14),
+                  child: Column(
+                    mainAxisSize: MainAxisSize.min,
+                    crossAxisAlignment: CrossAxisAlignment.start,
+                    children: [
+                      Row(
+                        children: [
+                          const Icon(Icons.settings, size: 16, color: Colors.grey),
+                          const SizedBox(width: 6),
+                          Text('悬浮窗设置', style: theme.textTheme.titleSmall),
+                        ],
+                      ),
+                      const SizedBox(height: 12),
+                      Row(
+                        children: [
+                          const Text('透明化', style: TextStyle(fontSize: 13)),
+                          Expanded(
+                            child: Slider(
+                              value: _opacity,
+                              min: 0.4,
+                              max: 1.0,
+                              divisions: 12,
+                              label: '${(_opacity * 100).round()}%',
+                              onChanged: (v) => _updateOpacity(v),
+                            ),
+                          ),
+                          Text('${(_opacity * 100).round()}%', style: const TextStyle(fontSize: 12, color: Colors.grey)),
+                        ],
+                      ),
+                      const SizedBox(height: 4),
+                      Row(
+                        children: [
+                          const Text('闲置自动贴边缩头', style: TextStyle(fontSize: 13)),
+                          const Spacer(),
+                          Switch(
+                            value: _autoHide,
+                            onChanged: _updateAutoHide,
+                          ),
+                        ],
+                      ),
+                      if (_autoHide) ...[
+                        const SizedBox(height: 2),
+                        Row(
+                          children: [
+                            const Text('延时', style: TextStyle(fontSize: 13)),
+                            Expanded(
+                              child: Slider(
+                                value: _autoHideDelay.toDouble(),
+                                min: 10,
+                                max: 120,
+                                divisions: 22,
+                                label: '$_autoHideDelay 秒',
+                                onChanged: (v) => _updateAutoHideDelay(v),
+                              ),
+                            ),
+                            Text('$_autoHideDelay 秒', style: const TextStyle(fontSize: 12, color: Colors.grey)),
+                          ],
+                        ),
+                      ],
+                    ],
+                  ),
+                ),
+              ),
+              const SizedBox(height: 16),
+              FilledButton.icon(
+                onPressed: _start,
+                icon: const Icon(Icons.pets),
+                label: Text(_overlayVisible ? '悬浮窗已开启,再次点击' : '开始悬浮窗'),
+              ),
+              if (_overlayVisible) ...[
+                const SizedBox(height: 8),
+                TextButton(onPressed: _stop, child: const Text('关闭悬浮窗')),
+              ],
+              const SizedBox(height: 12),
+              TextButton.icon(
+                onPressed: _showAbout,
+                icon: const Icon(Icons.info_outline, size: 18),
+                label: const Text('关于 · 摸鱼基地出品'),
+              ),
+              const SizedBox(height: 16),
+              Text(
+                '小提示:悬浮窗开启后回桌面就能看到灵宠,可拖动;闲置会自动缩到左上角露小头,点一下恢复。'
+                'v0.7.0 交互:单击灵宠=摸头,双击=戳肚子吐槽,长按=呼出喂食/隐藏面板。',
                 style: theme.textTheme.bodySmall?.copyWith(color: Colors.grey),
                 textAlign: TextAlign.center,
               ),
-            ),
-          ],
+            ],
+          ),
         ),
       ),
     );
@@ -871,6 +1008,8 @@ class _SpiritPainter extends CustomPainter {
 }
 
 /// 悬浮窗:蛋/小精灵 + 喂食/摸头/睡觉/吐槽(拖动由原生 enableDrag 接管)
+/// v0.7.0:气泡完整显示(顶部横条不越界) + 闲置自动贴边缩头 + 透明度实时同步
+/// + 交互重定义:单击=摸头 / 双击=戳肚子吐槽 / 长按=呼出喂食+隐藏面板
 class SpiritOverlay extends StatefulWidget {
   const SpiritOverlay({super.key});
 
@@ -884,20 +1023,32 @@ class _SpiritOverlayState extends State<SpiritOverlay>
   Timer? _bubbleTimer;
   Timer? _decayTimer;
   Timer? _boredTimer;
+  Timer? _autoHideTimer;
+  Timer? _panelTimer;
+  StreamSubscription<dynamic>? _overlaySub;
   SpiritPhase _phase = SpiritPhase.egg;
   bool _loaded = false;
   bool _evolving = false;
   bool _sleeping = false;
+  bool _mini = false;
+  bool _panelOpen = false;
+
+  static const double _bigW = 200;
+  static const double _bigH = 240;
+  static const double _miniW = 76;
+  static const double _miniH = 96;
 
   @override
   void initState() {
     super.initState();
+    _overlaySub = FlutterOverlayWindow.overlayListener.listen(_onOverlayEvent);
     _init();
   }
 
   Future<void> _init() async {
     final ph = await SpiritStore.load();
     await SpiritState.load();
+    await SpiritConfig.load();
     if (!mounted) return;
     setState(() {
       _phase = ph;
@@ -906,6 +1057,7 @@ class _SpiritOverlayState extends State<SpiritOverlay>
     _checkSleep();
     _decayTimer = Timer.periodic(const Duration(seconds: 30), (_) => _onDecay());
     _boredTimer = Timer.periodic(const Duration(seconds: 60), (_) => _onBored());
+    _resetAutoHide();
   }
 
   @override
@@ -913,7 +1065,74 @@ class _SpiritOverlayState extends State<SpiritOverlay>
     _bubbleTimer?.cancel();
     _decayTimer?.cancel();
     _boredTimer?.cancel();
+    _autoHideTimer?.cancel();
+    _panelTimer?.cancel();
+    _overlaySub?.cancel();
     super.dispose();
+  }
+
+  /// 主 App 设置透明化后通过 shareData 实时同步
+  void _onOverlayEvent(dynamic event) {
+    if (event == null) return;
+    double? op;
+    try {
+      if (event is String) {
+        final m = jsonDecode(event);
+        if (m is Map) op = (m['opacity'] as num?)?.toDouble();
+      } else if (event is Map) {
+        op = (event['opacity'] as num?)?.toDouble();
+      }
+    } catch (_) {}
+    if (op != null && mounted) {
+      setState(() => SpiritConfig.opacity = op.clamp(0.4, 1.0));
+    }
+  }
+
+  /// 互动后重置自动隐藏计时
+  void _touchAndReset() {
+    SpiritState.touch();
+    _resetAutoHide();
+  }
+
+  void _resetAutoHide() {
+    _autoHideTimer?.cancel();
+    if (!SpiritConfig.autoHide || _mini) return;
+    _autoHideTimer = Timer(
+      Duration(seconds: SpiritConfig.autoHideDelay),
+      _goMini,
+    );
+  }
+
+  Future<void> _goMini() async {
+    if (!_loaded || _mini) return;
+    _mini = true;
+    _panelOpen = false;
+    _bubbleTimer?.cancel();
+    setState(() {
+      _bubble = '🫥 我先缩起来啦~点我出来';
+    });
+    _bubbleTimer = Timer(const Duration(seconds: 3), () {
+      if (mounted) setState(() => _bubble = null);
+    });
+    await FlutterOverlayWindow.resizeOverlay(_miniW.toInt(), _miniH.toInt());
+    await FlutterOverlayWindow.moveOverlay(const OverlayPosition(0, 160));
+  }
+
+  Future<void> _restore() async {
+    if (!_mini) return;
+    _mini = false;
+    _panelOpen = false;
+    _bubble = null;
+    setState(() {});
+    await FlutterOverlayWindow.resizeOverlay(_bigW.toInt(), _bigH.toInt());
+    await FlutterOverlayWindow.moveOverlay(const OverlayPosition(60, 180));
+    _resetAutoHide();
+  }
+
+  Future<void> _onTapMini() async {
+    _touchAndReset();
+    await _restore();
+    _pet();
   }
 
   void _checkSleep() {
@@ -946,11 +1165,13 @@ class _SpiritOverlayState extends State<SpiritOverlay>
     setState(() {});
   }
 
+  /// 长时间不动:小文字弹窗 + 语音吐槽(40 秒起)
   void _onBored() {
     if (!_loaded || _sleeping) return;
     final idle = DateTime.now().difference(SpiritState.lastInteract).inSeconds;
-    if (idle < 60) return;
+    if (idle < 40) return;
     SpiritState.touch();
+    _resetAutoHide();
     final pool = _phase == SpiritPhase.spirit ? kSpiritTaunts : kTaunts;
     final text = pool[_randomInt(pool.length)];
     if (!mounted) return;
@@ -962,8 +1183,9 @@ class _SpiritOverlayState extends State<SpiritOverlay>
     SpiritTts.speak(text);
   }
 
+  /// 双击/小窗点击:吐槽文字
   void _onTap() {
-    SpiritState.touch();
+    _touchAndReset();
     if (_sleeping) {
       _sleeping = false;
     }
@@ -977,8 +1199,9 @@ class _SpiritOverlayState extends State<SpiritOverlay>
     SpiritTts.speak(text);
   }
 
+  /// 单击:摸头(第一反应)
   Future<void> _pet() async {
-    SpiritState.touch();
+    _touchAndReset();
     SpiritState.mood = math.min(100, SpiritState.mood + 10);
     await SpiritState.save();
     if (!mounted) return;
@@ -991,7 +1214,7 @@ class _SpiritOverlayState extends State<SpiritOverlay>
   }
 
   Future<void> _feed(Food food) async {
-    SpiritState.touch();
+    _touchAndReset();
     SpiritState.satiety = math.min(100, SpiritState.satiety + food.satiety);
     SpiritState.mood = math.min(100, SpiritState.mood + food.mood);
     SpiritState.feedCount++;
@@ -1037,40 +1260,44 @@ class _SpiritOverlayState extends State<SpiritOverlay>
     SpiritTts.speak(kSpiritTaunts.first);
   }
 
-  int _randomInt(int max) => DateTime.now().millisecondsSinceEpoch % max;
-
-  Widget _foodBtn(Food f, double s) {
-    return GestureDetector(
-      onTap: () => _feed(f),
-      child: Container(
-        width: s,
-        height: s,
-        margin: const EdgeInsets.symmetric(horizontal: 3),
-        alignment: Alignment.center,
-        decoration: BoxDecoration(
-          color: Colors.white.withOpacity(0.9),
-          shape: BoxShape.circle,
-          border: Border.all(color: Colors.black12),
-        ),
-        child: Text(f.emoji, style: TextStyle(fontSize: s * 0.62)),
-      ),
-    );
+  /// 长按:呼出操作面板(喂食+隐藏),4 秒自动收起
+  void _openPanel() {
+    if (_phase != SpiritPhase.spirit) return;
+    _touchAndReset();
+    _panelTimer?.cancel();
+    setState(() => _panelOpen = true);
+    _panelTimer = Timer(const Duration(seconds: 4), () {
+      if (mounted) setState(() => _panelOpen = false);
+    });
   }
 
-  Widget _petBtn(double s) {
+  void _closePanel() {
+    _panelTimer?.cancel();
+    if (!mounted) return;
+    setState(() => _panelOpen = false);
+  }
+
+  int _randomInt(int max) => DateTime.now().millisecondsSinceEpoch % max;
+
+  Widget _roundBtn({
+    required VoidCallback onTap,
+    required String emoji,
+    required double s,
+    bool danger = false,
+  }) {
     return GestureDetector(
-      onTap: _pet,
+      onTap: onTap,
       child: Container(
         width: s,
         height: s,
         margin: const EdgeInsets.symmetric(horizontal: 3),
         alignment: Alignment.center,
         decoration: BoxDecoration(
-          color: Colors.white.withOpacity(0.9),
+          color: danger ? Colors.white.withOpacity(0.95) : Colors.white.withOpacity(0.95),
           shape: BoxShape.circle,
-          border: Border.all(color: Colors.black12),
+          border: Border.all(color: danger ? Colors.redAccent : Colors.black12),
         ),
-        child: Text('💗', style: TextStyle(fontSize: s * 0.62)),
+        child: Text(emoji, style: TextStyle(fontSize: s * 0.62)),
       ),
     );
   }
@@ -1107,92 +1334,123 @@ class _SpiritOverlayState extends State<SpiritOverlay>
           final h = constraints.maxHeight;
           final center = Offset(w / 2, h / 2);
           final size = math.min(w * 0.56, h * 0.52);
-          final btnSize = 26.0;
+          final btnSize = 28.0;
           final foodTop = center.dy + size * 0.72;
-          return Stack(
-            children: [
-              // 进化闪光
-              if (_evolving)
-                Positioned.fill(
-                  child: IgnorePointer(
-                    child: Container(
-                      decoration: BoxDecoration(
-                        shape: BoxShape.circle,
-                        color: Colors.white.withOpacity(0.85),
-                        boxShadow: const [
-                          BoxShadow(color: Colors.amberAccent, blurRadius: 32),
-                        ],
+
+          // 缩头贴边态:只显示大头,点击恢复+摸头,双击吐槽
+          if (_mini) {
+            final miniSize = math.min(w * 0.92, h * 0.86);
+            return Opacity(
+              opacity: SpiritConfig.opacity,
+              child: GestureDetector(
+                onTap: _onTapMini,
+                onDoubleTap: _onTap,
+                child: Center(
+                  child: SpiritAvatar(
+                    phase: _phase,
+                    size: miniSize,
+                    evo: SpiritState.evo,
+                    sleep: _sleeping,
+                  ),
+                ),
+              ),
+            );
+          }
+
+          return Opacity(
+            opacity: SpiritConfig.opacity,
+            child: Stack(
+              children: [
+                // 进化闪光
+                if (_evolving)
+                  Positioned.fill(
+                    child: IgnorePointer(
+                      child: Container(
+                        decoration: BoxDecoration(
+                          shape: BoxShape.circle,
+                          color: Colors.white.withOpacity(0.85),
+                          boxShadow: const [
+                            BoxShadow(color: Colors.amberAccent, blurRadius: 32),
+                          ],
+                        ),
                       ),
                     ),
                   ),
+                // 气泡:顶部横条完整显示,不再越界被切
+                if (_bubble != null)
+                  Positioned(
+                    left: 8,
+                    right: 8,
+                    top: 6,
+                    child: Center(
+                      child: Container(
+                        constraints: const BoxConstraints(maxWidth: 170),
+                        padding: const EdgeInsets.symmetric(
+                          horizontal: 14,
+                          vertical: 8,
+                        ),
+                        decoration: BoxDecoration(
+                          color: Colors.white,
+                          borderRadius: BorderRadius.circular(16),
+                          boxShadow: const [
+                            BoxShadow(color: Colors.black26, blurRadius: 8),
+                          ],
+                        ),
+                        child: Text(
+                          _bubble!,
+                          style: const TextStyle(fontSize: 13, color: Colors.black87),
+                          textAlign: TextAlign.center,
+                        ),
+                      ),
+                    ),
+                  ),
+                // 灵宠(单击摸头 / 双击吐槽 / 长按面板;蛋形态单击破壳)
+                Positioned(
+                  left: center.dx - size / 2,
+                  top: center.dy - size * 0.62,
+                  child: GestureDetector(
+                    onTap: _phase == SpiritPhase.egg ? _onHatchComplete : _pet,
+                    onDoubleTap: _phase == SpiritPhase.egg ? null : _onTap,
+                    onLongPress: _phase == SpiritPhase.egg ? null : _openPanel,
+                    child: SpiritAvatar(
+                      phase: _phase,
+                      size: size,
+                      evo: SpiritState.evo,
+                      sleep: _sleeping,
+                      onHatchComplete: _onHatchComplete,
+                    ),
+                  ),
                 ),
-              // 气泡
-              if (_bubble != null)
+                // 饱腹度/心情细条
                 Positioned(
                   left: center.dx - 70,
-                  top: center.dy - size * 1.1,
-                  child: Container(
-                    constraints: const BoxConstraints(maxWidth: 150),
-                    padding: const EdgeInsets.symmetric(
-                      horizontal: 14,
-                      vertical: 8,
-                    ),
-                    decoration: BoxDecoration(
-                      color: Colors.white,
-                      borderRadius: BorderRadius.circular(16),
-                      boxShadow: const [
-                        BoxShadow(color: Colors.black26, blurRadius: 8),
+                  top: foodTop - 16,
+                  child: SizedBox(
+                    width: 140,
+                    child: Row(
+                      children: [
+                        _statBar('🍽️', SpiritState.satiety, const Color(0xFFFF9800)),
+                        const SizedBox(width: 6),
+                        _statBar('😊', SpiritState.mood, const Color(0xFFE91E63)),
                       ],
                     ),
-                    child: Text(
-                      _bubble!,
-                      style: const TextStyle(fontSize: 13, color: Colors.black87),
+                  ),
+                ),
+                // 操作面板(长按呼出):3种食物 + 摸头 + 隐藏;平时隐藏,界面更干净
+                if (_panelOpen)
+                  Positioned(
+                    left: center.dx - 88,
+                    top: foodTop,
+                    child: Row(
+                      children: [
+                        for (final f in kFoods) _roundBtn(onTap: () => _feed(f), emoji: f.emoji, s: btnSize),
+                        _roundBtn(onTap: _pet, emoji: '💗', s: btnSize),
+                        _roundBtn(onTap: _goMini, emoji: '🫥', s: btnSize, danger: true),
+                      ],
                     ),
                   ),
-                ),
-              // 灵宠
-              Positioned(
-                left: center.dx - size / 2,
-                top: center.dy - size * 0.62,
-                child: GestureDetector(
-                  onTap: _onTap,
-                  onLongPress: _pet,
-                  child: SpiritAvatar(
-                    phase: _phase,
-                    size: size,
-                    evo: SpiritState.evo,
-                    sleep: _sleeping,
-                    onHatchComplete: _onHatchComplete,
-                  ),
-                ),
-              ),
-              // 饱腹度/心情细条
-              Positioned(
-                left: center.dx - 70,
-                top: foodTop - 16,
-                child: SizedBox(
-                  width: 140,
-                  child: Row(
-                    children: [
-                      _statBar('🍽️', SpiritState.satiety, const Color(0xFFFF9800)),
-                      const SizedBox(width: 6),
-                      _statBar('😊', SpiritState.mood, const Color(0xFFE91E63)),
-                    ],
-                  ),
-                ),
-              ),
-              // 底部按钮:3种食物 + 摸头
-              Positioned(
-                left: center.dx - 70,
-                top: foodTop,
-                child: Row(
-                  children: [
-                    for (final f in kFoods) _foodBtn(f, btnSize),
-                    _petBtn(btnSize),
-                  ],
-                ),
-              ),
-            ],
+              ],
+            ),
           );
         },
       ),
