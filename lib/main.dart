@@ -780,8 +780,78 @@ class _HomePageState extends State<HomePage> {
   }
 }
 
+/// 通用序列帧播放组件:从 assets/<dir>/<dir>_NN.png 循环播放
+class SpriteAnim extends StatefulWidget {
+  const SpriteAnim({
+    super.key,
+    required this.dir,
+    this.fps = 8,
+    this.fit = BoxFit.contain,
+  });
+  final String dir;
+  final double fps;
+  final BoxFit fit;
+
+  @override
+  State<SpriteAnim> createState() => _SpriteAnimState();
+}
+
+class _SpriteAnimState extends State<SpriteAnim>
+    with SingleTickerProviderStateMixin {
+  late final AnimationController _c;
+  int _idx = 0;
+  late int _frames;
+
+  static const Map<String, int> _counts = {
+    'egg': 11,
+    'idle': 5,
+    'eat': 5,
+    'happy': 3,
+    'roll': 5,
+    'hungry': 3,
+    'sleep': 4,
+    'angry': 3,
+    'dance': 5,
+    'talk': 3,
+    'evolve': 8,
+    'final': 5,
+  };
+
+  @override
+  void initState() {
+    super.initState();
+    _frames = _counts[widget.dir] ?? 1;
+    _c = AnimationController(
+      vsync: this,
+      duration: Duration(milliseconds: (1000 ~/ widget.fps).clamp(50, 500)),
+    );
+    _c.addListener(() {
+      final idx = (_c.value * _frames).floor() % _frames;
+      if (idx != _idx) setState(() => _idx = idx);
+    });
+    _c.repeat();
+  }
+
+  @override
+  void dispose() {
+    _c.dispose();
+    super.dispose();
+  }
+
+  @override
+  Widget build(BuildContext context) {
+    final name = '${widget.dir}_${(_idx + 1).toString().padLeft(2, '0')}.png';
+    return Image.asset(
+      'assets/${widget.dir}/$name',
+      fit: widget.fit,
+      gaplessPlayback: true,
+      errorBuilder: (_, __, ___) => const SizedBox.shrink(),
+    );
+  }
+}
+
 /// 灵宠形象:蛋(点击可破壳) / 小精灵(待机呼吸眨眼)
-/// 悬浮窗和主页共用,素材到位后替换为豆包序列帧
+/// v0.7.3:占位 CustomPaint 全部替换为豆包真实序列帧素材
 class SpiritAvatar extends StatefulWidget {
   const SpiritAvatar({
     super.key,
@@ -791,6 +861,7 @@ class SpiritAvatar extends StatefulWidget {
     this.onHatchBlocked,
     this.evo = false,
     this.sleep = false,
+    this.action,
   });
 
   final SpiritPhase phase;
@@ -801,6 +872,9 @@ class SpiritAvatar extends StatefulWidget {
   final VoidCallback? onHatchBlocked;
   final bool evo;
   final bool sleep;
+
+  /// 互动动作序列: eat / happy / talk / angry / dance / roll / hungry / evolve
+  final String? action;
 
   @override
   State<SpiritAvatar> createState() => _SpiritAvatarState();
@@ -851,22 +925,31 @@ class _SpiritAvatarState extends State<SpiritAvatar>
   Widget build(BuildContext context) {
     final s = widget.size;
     final isSpirit = widget.phase == SpiritPhase.spirit;
+    final action = widget.action;
 
     if (isSpirit || _justHatched) {
-      // 小精灵形态:呼吸 + 眨眼
+      // 小精灵形态:优先互动动作序列,否则按 进化/睡觉/待机 选素材
+      String dir = 'idle';
+      if (action != null) {
+        dir = action;
+      } else if (widget.evo) {
+        dir = 'final';
+      } else if (widget.sleep) {
+        dir = 'sleep';
+      }
       return AnimatedBuilder(
         animation: _idle,
         builder: (context, child) {
           final t = _idle.value;
-          final blink = math.sin(t * math.pi * 2) > 0.92 ? 0.0 : 1.0;
+          final isAction = action != null;
           return Transform.translate(
-            offset: Offset(0, -t * 6),
+            offset: Offset(0, isAction ? 0 : -t * 6),
             child: Transform.scale(
-              scale: 1 + t * 0.02,
+              scale: isAction ? 1.0 : 1 + t * 0.02,
               child: SizedBox(
                 width: s,
                 height: s * 1.15,
-                child: CustomPaint(painter: _SpiritPainter(blink: widget.sleep ? 0 : blink, isEvo: widget.evo)),
+                child: SpriteAnim(dir: dir, fps: dir == 'talk' || dir == 'angry' ? 6 : 8),
               ),
             ),
           );
@@ -875,13 +958,12 @@ class _SpiritAvatarState extends State<SpiritAvatar>
     }
 
     if (_hatching) {
-      // 破壳动画:蛋震 → 裂纹 → 闪光 → 蹦出小精灵
+      // 破壳动画:蛋震 → 裂纹 → 闪光 → 蹦出小精灵(真实素材)
       return AnimatedBuilder(
         animation: _hatch,
         builder: (context, child) {
           final t = _hatch.value;
           final shake = t < 0.3 ? math.sin(t * 60) * 6 * (1 - t) : 0.0;
-          final crack = t < 0.4 ? (t / 0.4).clamp(0.0, 1.0) : 1.0;
           final flash = t >= 0.35 && t <= 0.55
               ? (1 - (t - 0.35) / 0.2).clamp(0.0, 1.0)
               : 0.0;
@@ -900,14 +982,17 @@ class _SpiritAvatarState extends State<SpiritAvatar>
                     color: Colors.white.withOpacity(flash * 0.9),
                   ),
                 ),
-              // 蛋
+              // 蛋:按破壳进度切帧(11帧蛋序列:完整→裂纹→发光)
               Transform.translate(
                 offset: Offset(shake, 0),
                 child: SizedBox(
                   width: s,
                   height: s * 1.15,
-                  child: CustomPaint(
-                    painter: _EggPainter(crack: crack.toDouble()),
+                  child: Image.asset(
+                    'assets/egg/egg_${((t * 10).floor().clamp(0, 10) + 1).toString().padLeft(2, '0')}.png',
+                    fit: BoxFit.contain,
+                    gaplessPlayback: true,
+                    errorBuilder: (_, __, ___) => const SizedBox.shrink(),
                   ),
                 ),
               ),
@@ -920,7 +1005,7 @@ class _SpiritAvatarState extends State<SpiritAvatar>
                     child: SizedBox(
                       width: s,
                       height: s * 1.15,
-                      child: CustomPaint(painter: _SpiritPainter(blink: 1.0, isEvo: widget.evo)),
+                      child: SpriteAnim(dir: 'idle', fps: 8),
                     ),
                   ),
                 ),
@@ -930,7 +1015,7 @@ class _SpiritAvatarState extends State<SpiritAvatar>
       );
     }
 
-    // 蛋形态:呼吸浮动 + 点击破壳
+    // 蛋形态:真实蛋素材(完整帧) + 呼吸浮动 + 点击破壳
     return GestureDetector(
       onTap: _startHatch,
       child: AnimatedBuilder(
@@ -945,7 +1030,12 @@ class _SpiritAvatarState extends State<SpiritAvatar>
         child: SizedBox(
           width: s,
           height: s * 1.15,
-          child: CustomPaint(painter: _EggPainter(crack: 0)),
+          child: Image.asset(
+            'assets/egg/egg_01.png',
+            fit: BoxFit.contain,
+            gaplessPlayback: true,
+            errorBuilder: (_, __, ___) => const SizedBox.shrink(),
+          ),
         ),
       ),
     );
@@ -1207,11 +1297,22 @@ class _SpiritOverlayState extends State<SpiritOverlay>
   bool _sleeping = false;
   bool _mini = false;
   bool _panelOpen = false;
+  String? _action;
+  Timer? _actionTimer;
 
   static const double _bigW = 200;
   static const double _bigH = 240;
   static const double _miniW = 76;
   static const double _miniH = 96;
+
+  /// 播放一次互动动画,结束后自动回待机
+  void _playAction(String dir, [int ms = 1600]) {
+    _actionTimer?.cancel();
+    setState(() => _action = dir);
+    _actionTimer = Timer(Duration(milliseconds: ms), () {
+      if (mounted) setState(() => _action = null);
+    });
+  }
 
   @override
   void initState() {
@@ -1244,6 +1345,7 @@ class _SpiritOverlayState extends State<SpiritOverlay>
     _boredTimer?.cancel();
     _autoHideTimer?.cancel();
     _panelTimer?.cancel();
+    _actionTimer?.cancel();
     _overlaySub?.cancel();
     super.dispose();
   }
@@ -1333,6 +1435,7 @@ class _SpiritOverlayState extends State<SpiritOverlay>
     _checkSleep();
     if (!mounted) return;
     if (SpiritState.satiety < 30) {
+      _playAction('hungry', 1600);
       _bubbleTimer?.cancel();
       setState(() => _bubble = '🍽️ 我饿啦!快喂我~');
       _bubbleTimer = Timer(const Duration(seconds: 4), () {
@@ -1366,6 +1469,7 @@ class _SpiritOverlayState extends State<SpiritOverlay>
     if (_sleeping) {
       _sleeping = false;
     }
+    _playAction('talk', 1400);
     _bubbleTimer?.cancel();
     final pool = _phase == SpiritPhase.spirit ? kSpiritTaunts : kTaunts;
     final text = pool[_randomInt(pool.length)];
@@ -1382,6 +1486,7 @@ class _SpiritOverlayState extends State<SpiritOverlay>
     SpiritState.mood = math.min(100, SpiritState.mood + 10);
     await SpiritState.save();
     if (!mounted) return;
+    _playAction('happy', 1400);
     _bubbleTimer?.cancel();
     setState(() => _bubble = '💗 摸摸头~心情+10');
     _bubbleTimer = Timer(const Duration(seconds: 3), () {
@@ -1397,6 +1502,7 @@ class _SpiritOverlayState extends State<SpiritOverlay>
     SpiritState.feedCount++;
     await SpiritState.save();
     if (!mounted) return;
+    _playAction('eat', 1800);
     _bubbleTimer?.cancel();
     setState(() => _bubble = '${food.emoji} 好好吃~(+${food.satiety})');
     _bubbleTimer = Timer(const Duration(seconds: 3), () {
@@ -1412,6 +1518,7 @@ class _SpiritOverlayState extends State<SpiritOverlay>
     SpiritState.evo = true;
     await SpiritState.save();
     if (!mounted) return;
+    _playAction('evolve', 2200);
     _bubbleTimer?.cancel();
     setState(() {
       _evolving = true;
@@ -1615,6 +1722,7 @@ class _SpiritOverlayState extends State<SpiritOverlay>
                       size: size,
                       evo: SpiritState.evo,
                       sleep: _sleeping,
+                      action: _action,
                       onHatchComplete: _onHatchComplete,
                       onHatchBlocked: _onHatchBlocked,
                     ),
