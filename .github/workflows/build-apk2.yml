@@ -50,19 +50,18 @@ jobs:
 
       - name: Diagnose asset bundling
         run: |
-          pip install -q pyyaml
-          python3 - <<'PY'
-          import yaml
-          p = yaml.safe_load(open('pubspec.yaml'))
-          fl = p.get('flutter', {})
-          print('flutter keys:', list(fl.keys()))
-          print('assets:', fl.get('assets'))
-          PY
-          flutter build bundle --release --verbose 2>&1 | grep -iE "asset|target|exception|error" | head -120
+          echo "=== before clean ==="
+          ls .dart_tool/flutter_build 2>/dev/null || echo "no flutter_build dir"
+          cat build/flutter_assets/.last_build_id 2>/dev/null || echo "no last_build_id"
+          rm -rf .dart_tool/flutter_build build
+          echo "=== clean done, rebuilding ==="
+          time flutter build bundle --release --verbose 2>&1 | tee /tmp/bundle.log | grep -iE "asset|kernel|compile|exception|error|Building|target" | head -60
+          echo "=== tail of bundle log ==="
+          tail -15 /tmp/bundle.log
           echo "=== flutter_assets ==="
-          find build/flutter_assets -type f 2>/dev/null | head -80
+          find build/flutter_assets -type f | head -80
           echo "=== AssetManifest.json ==="
-          cat build/flutter_assets/AssetManifest.json 2>/dev/null | head -5
+          cat build/flutter_assets/AssetManifest.json 2>/dev/null | head -10
 
       - name: Build APK
         run: flutter build apk --release
