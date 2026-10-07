@@ -40,6 +40,16 @@ jobs:
           flutter clean
           flutter pub get
 
+      - name: Generate asset directory declarations
+        run: |
+          set -e
+          # "- assets/" 不递归子目录，而 PNG 全在 assets/<动作>/ 下 -> 必须逐目录声明。
+          # 扫描含 PNG 的子目录自动重写 pubspec（在 flutter create/pub get 之后执行，不会被覆盖）。
+          python3 ci/gen_assets.py
+          flutter pub get
+          echo "==== pubspec flutter section ===="
+          sed -n '/^flutter:/,$p' pubspec.yaml
+
       - name: Verify bundle (Dart compiled + 66 PNG assets)
         run: |
           set -e

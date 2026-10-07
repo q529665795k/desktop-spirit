@@ -21,4 +21,16 @@ dev_dependencies:
 flutter:
   uses-material-design: true
   assets:
-    - assets/
+    - assets/angry/
+    - assets/dance/
+    - assets/eat/
+    - assets/egg/
+    - assets/evolve/
+    - assets/final/
+    - assets/happy/
+    - assets/hungry/
+    - assets/idle/
+    - assets/items/
+    - assets/roll/
+    - assets/sleep/
+    - assets/talk/
