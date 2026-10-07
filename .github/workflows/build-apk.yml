@@ -1,0 +1,63 @@
+name: build-apk
+
+on:
+  push:
+    branches: [main]
+  workflow_dispatch:
+
+jobs:
+  build:
+    runs-on: ubuntu-latest
+    steps:
+      - name: Checkout
+        uses: actions/checkout@v4
+
+      - name: Setup Flutter
+        uses: subosito/flutter-action@v2
+        with:
+          channel: stable
+          flutter-version: 3.24.3
+          cache: true
+
+      - name: Create Android platform skeleton
+        run: flutter create . --platforms=android --org com.marvis --project-name desktop_spirit
+
+      - name: Patch AndroidManifest for overlay window
+        run: |
+          python3 - <<'EOF'
+          p = 'android/app/src/main/AndroidManifest.xml'
+          s = open(p).read()
+          perms = ('    <uses-permission android:name="android.permission.SYSTEM_ALERT_WINDOW" />\n'
+                   '        <uses-permission android:name="android.permission.FOREGROUND_SERVICE" />\n'
+                   '        <uses-permission android:name="android.permission.FOREGROUND_SERVICE_SPECIAL_USE" />\n'
+                   '        <uses-permission android:name="android.permission.POST_NOTIFICATIONS" />\n')
+          if 'SYSTEM_ALERT_WINDOW' not in s:
+              s = s.replace('<application', perms + '    <application', 1)
+          services = ('        <service\n'
+                      '            android:name="flutter.overlay.window.flutter_overlay_window.OverlayService"\n'
+                      '            android:exported="false"\n'
+                      '            android:foregroundServiceType="specialUse">\n'
+                      '            <property\n'
+                      '                android:name="android.app.PROPERTY_SPECIAL_USE_FGS_SUBTYPE"\n'
+                      '                android:value="desktop spirit pet overlay" />\n'
+                      '        </service>\n'
+                      '        <service\n'
+                      '            android:name="flutter.overlay.window.flutter_overlay_window.OverlayForegroundService"\n'
+                      '            android:exported="false" />\n')
+          if 'OverlayService' not in s:
+              s = s.replace('</application>', services + '    </application>', 1)
+          open(p, 'w').write(s)
+          print('manifest patched')
+          EOF
+
+      - name: Get packages
+        run: flutter pub get
+
+      - name: Build APK
+        run: flutter build apk --release
+
+      - name: Upload APK
+        uses: actions/upload-artifact@v4
+        with:
+          name: desktop-spirit-apk
+          path: build/app/outputs/flutter-apk/app-release.apk
