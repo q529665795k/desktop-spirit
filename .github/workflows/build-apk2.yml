@@ -19,16 +19,16 @@ jobs:
           flutter-version: 3.24.3
           cache: true
 
-      - name: Create Android platform skeleton
-        run: flutter create . --platforms=android --org com.marvis --project-name desktop_spirit
-
-      - name: Restore pubspec assets declaration
+      - name: Verify project state
         run: |
-          git checkout -- pubspec.yaml || true
-          echo "=== pubspec.yaml (after restore) ==="
-          cat pubspec.yaml
+          echo "=== pubspec flutter section ==="
+          sed -n '/^flutter:/,/^[a-z]/p' pubspec.yaml
           echo "=== assets png count ==="
           find assets -name "*.png" | wc -l
+          echo "=== lib/main.dart size ==="
+          wc -c lib/main.dart
+          echo "=== android dir ==="
+          ls android/app/src/main/AndroidManifest.xml
 
       - name: Patch AndroidManifest for overlay window
         run: |
@@ -50,18 +50,13 @@ jobs:
 
       - name: Diagnose asset bundling
         run: |
-          echo "=== before clean ==="
-          ls .dart_tool/flutter_build 2>/dev/null || echo "no flutter_build dir"
-          cat build/flutter_assets/.last_build_id 2>/dev/null || echo "no last_build_id"
-          rm -rf .dart_tool/flutter_build build
-          echo "=== clean done, rebuilding ==="
-          time flutter build bundle --release --verbose 2>&1 | tee /tmp/bundle.log | grep -iE "asset|kernel|compile|exception|error|Building|target" | head -60
-          echo "=== tail of bundle log ==="
-          tail -15 /tmp/bundle.log
+          time flutter build bundle --release --verbose 2>&1 | tee /tmp/bundle.log | grep -iE "asset|kernel|compile|exception|error|Building|Starting|Complete|target" | head -80
           echo "=== flutter_assets ==="
-          find build/flutter_assets -type f | head -80
+          find build/flutter_assets -type f | head -90
           echo "=== AssetManifest.json ==="
           cat build/flutter_assets/AssetManifest.json 2>/dev/null | head -10
+          echo "=== kernel_blob? ==="
+          ls -la build/flutter_assets/kernel_blob.bin 2>/dev/null || echo "NO kernel_blob.bin"
 
       - name: Build APK
         run: flutter build apk --release
