@@ -30,12 +30,16 @@
             android:name="flutterEmbedding"
             android:value="2" />
 
+        <!-- flutter_overlay_window 的悬浮窗服务：
+             1) 类名必须是 flutter.overlay.window.flutter_overlay_window.OverlayService（旧版误写成 id.flutter.* 导致系统找不到服务、R8 裁掉真类，悬浮窗起不来）；
+             2) Android 14(targetSdk34) 强制 foregroundServiceType=specialUse 并声明 property，否则 startForeground 直接抛异常、服务崩溃不显示。 -->
         <service
-            android:name="id.flutter.flutter_overlay_window.OverlayService"
-            android:permission="android.permission.SYSTEM_ALERT_WINDOW"
-            android:exported="false" />
-        <service
-            android:name="id.flutter.flutter_overlay_window.OverlayForegroundService"
-            android:exported="false" />
+            android:name="flutter.overlay.window.flutter_overlay_window.OverlayService"
+            android:exported="false"
+            android:foregroundServiceType="specialUse">
+            <property
+                android:name="android.app.PROPERTY_SPECIAL_USE_FGS_SUBTYPE"
+                android:value="desktop_pet_overlay" />
+        </service>
     </application>
 </manifest>

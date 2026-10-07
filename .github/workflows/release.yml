@@ -80,7 +80,26 @@ jobs:
           echo "APK PNG count = $PNG"
           test "$PNG" -eq 66
           grep -q "egg_01" /tmp/apk.txt && echo "OK egg frame packaged"
-          echo "===== APK verified, not an empty shell ====="
+
+          # 悬浮窗自检:OverlayService 真实类必须打进 dex。
+          # 旧版 manifest 把类名误写成 id.flutter.* ，R8 会按错误引用把真实 Service 类裁掉，
+          # 表现为悬浮窗服务起不来、蛋不显示。这里用 dex 内真实类描述符做硬校验。
+          rm -rf /tmp/dex && mkdir -p /tmp/dex
+          ( cd /tmp/dex && unzip -oq "$GITHUB_WORKSPACE/$APK" 'classes*.dex' )
+          if cat /tmp/dex/classes*.dex | strings | grep -q "flutter/overlay/window/flutter_overlay_window/OverlayService"; then
+            echo "OK OverlayService class present in dex"
+          else
+            echo "::error::OverlayService class missing from dex (manifest service name wrong / stripped by R8)"
+            exit 1
+          fi
+          # 合并后的 Manifest 必须带 Android14 specialUse 前台服务类型,否则 startForeground 崩溃
+          if grep -rls "PROPERTY_SPECIAL_USE_FGS_SUBTYPE" build/app/intermediates --include=AndroidManifest.xml | grep -q .; then
+            echo "OK foregroundServiceType=specialUse merged"
+          else
+            echo "::error::specialUse foreground service type not found in merged manifest"
+            exit 1
+          fi
+          echo "===== APK verified, not an empty shell, overlay service wired ====="
 
       - name: Upload APK
         uses: actions/upload-artifact@v4

@@ -10,7 +10,7 @@ import 'package:flutter_tts/flutter_tts.dart';
 /// 品牌署名
 const String kBrand = '摸鱼基地出品';
 const String kAppName = '桌面灵宠';
-const String kVersion = 'v0.7.2';
+const String kVersion = 'v0.8.0';
 
 /// 预置吐槽短句(第5步会接系统 TTS 语音)
 const List<String> kTaunts = [
@@ -66,49 +66,114 @@ const List<Food> kFoods = [
 ];
 
 /// TTS 语音吐槽(第5步,系统文字转语音,零素材)
-/// v0.7.2:语速 / 男女声由 SpiritConfig 设置驱动
+/// v0.8.0:
+/// - 初始化容错:语言设置失败不再把引擎标记为不可用(旧版一旦 zh-CN 设置抛错就永久静默,试听/播报全无声音);
+/// - 男女声优先用 getVoices 枚举到的真实中文男/女声线 setVoice,引擎没有分声线时再用音调(低音调=男/高音调=女)兜底;
+/// - 设置切换即时生效(先 ensure 建好引擎再 apply)。
 class SpiritTts {
   static FlutterTts? _tts;
   static bool _ready = false;
+  static Map<String, String>? _maleVoice;
+  static Map<String, String>? _femaleVoice;
+  static bool _voicesScanned = false;
 
   static Future<void> ensure() async {
     if (_tts != null) return;
+    final t = FlutterTts();
+    _tts = t;
     try {
-      _tts = FlutterTts();
-      await _tts!.setLanguage('zh-CN');
-      await _tts!.setVolume(1.0);
+      await t.setVolume(1.0);
+      await t.setPitch(1.0);
+      await t.awaitSpeakCompletion(false);
+      // 中文语言:zh-CN 不可用就退 zh,再不行用系统默认;语言失败不致命,绝不能因此静音
+      try {
+        if (await t.isLanguageAvailable('zh-CN') == true) {
+          await t.setLanguage('zh-CN');
+        } else if (await t.isLanguageAvailable('zh') == true) {
+          await t.setLanguage('zh');
+        }
+      } catch (_) {}
+      await _scanVoices(t);
       _ready = true;
     } catch (_) {
-      _ready = false;
+      // 即使初始化有异常,也允许后续尝试播报(部分引擎首次调用才真正就绪)
+      _ready = true;
     }
   }
 
-  /// 应用用户设置的语速 / 男女声
-  /// 女声靠高音调、男声靠低音调实现(不依赖引擎声音库,小米/Google TTS 都通用)
-  static Future<void> applySettings() async {
-    if (_tts == null) return;
+  static bool _voiceIsMale(String name) {
+    final n = name.toLowerCase();
+    return n.contains('male') && !n.contains('female') ||
+        n.contains('男') ||
+        n.contains('#male') ||
+        n.contains('-male');
+  }
+
+  static bool _voiceIsFemale(String name) {
+    final n = name.toLowerCase();
+    return n.contains('female') || n.contains('女') || n.contains('#female');
+  }
+
+  static Future<void> _scanVoices(FlutterTts t) async {
+    if (_voicesScanned) return;
+    _voicesScanned = true;
     try {
-      await _tts!.setSpeechRate(SpiritConfig.ttsRate.clamp(0.3, 1.0));
+      final dynamic raw = await t.getVoices;
+      if (raw is! List) return;
+      final List<Map<String, String>> zh = [];
+      for (final v in raw) {
+        if (v is! Map) continue;
+        final loc = '${v['locale'] ?? v['Locale'] ?? v['language'] ?? ''}'.toLowerCase();
+        if (!loc.startsWith('zh')) continue;
+        zh.add(Map<String, String>.from(
+          (v as Map).map((k, val) => MapEntry(k.toString(), val.toString())),
+        ));
+      }
+      for (final v in zh) {
+        final name = v['name'] ?? v['Name'] ?? '';
+        _maleVoice ??= _voiceIsMale(name) ? v : null;
+        _femaleVoice ??= _voiceIsFemale(name) ? v : null;
+      }
+    } catch (_) {}
+  }
+
+  /// 应用用户设置的语速 / 男女声
+  static Future<void> applySettings() async {
+    await ensure();
+    final t = _tts;
+    if (t == null) return;
+    try {
+      await t.setSpeechRate(SpiritConfig.ttsRate.clamp(0.3, 1.0));
       switch (SpiritConfig.ttsVoice) {
         case 'male':
-          await _tts!.setPitch(0.6);
+          if (_maleVoice != null) {
+            await t.setVoice(_maleVoice!);
+          }
+          // 真实男声线优先;没有则用明显偏低的音调模拟,0.55 比旧版 0.6 更低沉、性别差异更明显
+          await t.setPitch(0.55);
           break;
         case 'female':
-          await _tts!.setPitch(1.3);
+          if (_femaleVoice != null) {
+            await t.setVoice(_femaleVoice!);
+          }
+          await t.setPitch(1.35);
           break;
         default:
-          await _tts!.setPitch(1.0);
+          await t.setPitch(1.0);
       }
     } catch (_) {}
   }
 
   static Future<void> speak(String text) async {
     await ensure();
-    if (!_ready) return;
+    final t = _tts;
+    if (t == null || !_ready) return;
     try {
       await applySettings();
-      await _tts!.stop();
-      await _tts!.speak(text);
+      await t.stop();
+      // 部分引擎 stop 后立刻 speak 会吞掉第一句,稍等再播
+      await Future.delayed(const Duration(milliseconds: 80));
+      await t.speak(text);
     } catch (_) {}
   }
 }
@@ -169,6 +234,52 @@ class SpiritStore {
     if (hatchReadyAt == null) return 0;
     final diff = hatchReadyAt!.difference(DateTime.now()).inSeconds;
     return diff > 0 ? diff : 0;
+  }
+}
+
+/// 孵化期(蛋形态 5 分钟)互动调度:里程碑倒计时台词 + 撒娇喊饿。
+/// 主界面与悬浮窗各自持有定时器、各自调用(二者是独立引擎,静态状态不共享,互不影响)。
+class HatchChatter {
+  static const List<int> milestones = [180, 120, 60, 30, 10];
+  static final Set<int> _said = <int>{};
+  static int _idleTicks = 0;
+
+  static const List<String> idleLines = [
+    '主人,我饿啦,蛋壳里好无聊~',
+    '主人在干嘛呀,陪陪我嘛',
+    '敲敲蛋壳…主人能听到我吗?',
+    '我快饿成纸片啦,想吃小鱼干',
+    '主人,等我出来天天陪你玩',
+    '蛋壳有点痒,好想快点出来',
+    '咕噜咕噜~主人抱抱蛋嘛',
+    '主人,记得喂我点吃的呀',
+  ];
+
+  /// 每 10 秒调一次;返回本次应播报的台词,空串表示本次静默。
+  static String tick(int remainSeconds) {
+    if (remainSeconds <= 0) {
+      return '主人,我要破壳啦,快点点我!';
+    }
+    for (final m in milestones) {
+      if (remainSeconds <= m && !_said.contains(m)) {
+        _said.add(m);
+        if (m >= 60) {
+          return '主人,我还有${m ~/ 60}分钟就要破壳啦~';
+        }
+        return '主人,我还有$m秒就要破壳啦~';
+      }
+    }
+    _idleTicks++;
+    // 约每 30 秒随机撒娇/喊饿一句
+    if (_idleTicks % 3 == 0) {
+      return idleLines[DateTime.now().millisecond % idleLines.length];
+    }
+    return '';
+  }
+
+  static void reset() {
+    _said.clear();
+    _idleTicks = 0;
   }
 }
 
@@ -301,6 +412,69 @@ class _HomePageState extends State<HomePage> {
   double _ttsRate = 0.5;
   String _ttsVoice = 'female';
 
+  // 主界面动作 / 孵化期互动
+  String? _action;
+  Timer? _actionTimer;
+  Timer? _hatchTimer;
+  Timer? _eggBubbleTimer;
+  String? _eggBubble;
+  int _wiggleToken = 0;
+
+  void _playAction(String dir, [int ms = 1800]) {
+    _actionTimer?.cancel();
+    setState(() => _action = dir);
+    _actionTimer = Timer(Duration(milliseconds: ms), () {
+      if (mounted) setState(() => _action = null);
+    });
+  }
+
+  void _wiggle() {
+    if (mounted) setState(() => _wiggleToken++);
+  }
+
+  void _showEggBubble(String text, {int seconds = 3}) {
+    _eggBubbleTimer?.cancel();
+    setState(() => _eggBubble = text);
+    _eggBubbleTimer = Timer(Duration(seconds: seconds), () {
+      if (mounted) setState(() => _eggBubble = null);
+    });
+  }
+
+  /// 主界面孵化期互动:倒计时里程碑 + 撒娇喊饿 + 语音 + 蛋小动作
+  void _startHatchChatter() {
+    _hatchTimer?.cancel();
+    HatchChatter.reset();
+    if (_phase != SpiritPhase.egg) return;
+    Timer(const Duration(seconds: 2), () {
+      if (mounted && _phase == SpiritPhase.egg) {
+        _showEggBubble('主人,我在蛋里啦,5 分钟后破壳,记得喂我呀~', seconds: 4);
+        SpiritTts.speak('主人,我在蛋里啦,记得喂我呀');
+        _wiggle();
+      }
+    });
+    _hatchTimer = Timer.periodic(const Duration(seconds: 10), (_) {
+      if (!mounted || _phase != SpiritPhase.egg) {
+        _hatchTimer?.cancel();
+        return;
+      }
+      final remain = SpiritStore.remainingSeconds();
+      final line = HatchChatter.tick(remain);
+      if (line.isNotEmpty) {
+        _showEggBubble(line, seconds: 4);
+        SpiritTts.speak(line);
+        _wiggle();
+      }
+    });
+  }
+
+  @override
+  void dispose() {
+    _actionTimer?.cancel();
+    _hatchTimer?.cancel();
+    _eggBubbleTimer?.cancel();
+    super.dispose();
+  }
+
   @override
   void initState() {
     super.initState();
@@ -330,6 +504,9 @@ class _HomePageState extends State<HomePage> {
       _phase = ph;
       _loaded = true;
     });
+    if (ph == SpiritPhase.egg && SpiritStore.remainingSeconds() > 0) {
+      _startHatchChatter();
+    }
   }
 
   Future<void> _checkPermission() async {
@@ -342,11 +519,36 @@ class _HomePageState extends State<HomePage> {
   }
 
   Future<void> _start() async {
-    // 每次实查系统真实授权状态(MIUI 上 requestPermission 返回值不可信)
+    // MIUI 上 isPermissionGranted 在用户刚授权后仍可能误报 false,
+    // 因此:先请求权限,然后无论查询结果如何都乐观尝试一次 showOverlay;
+    // 只有 showOverlay 真正抛错且确实未授权时,才弹引导。避免"已授权却永远不显示悬浮窗"。
     var granted = await FlutterOverlayWindow.isPermissionGranted();
     if (!granted) {
-      await FlutterOverlayWindow.requestPermission();
+      try {
+        await FlutterOverlayWindow.requestPermission();
+      } catch (_) {}
+      await Future.delayed(const Duration(milliseconds: 400));
       granted = await FlutterOverlayWindow.isPermissionGranted();
+    }
+    try {
+      await FlutterOverlayWindow.showOverlay(
+        height: 240,
+        width: 200,
+        overlayTitle: kAppName,
+        overlayContent: '灵宠悬浮窗',
+        flag: OverlayFlag.defaultFlag,
+        enableDrag: true,
+        positionGravity: PositionGravity.auto,
+      );
+      if (!mounted) return;
+      setState(() {
+        _permission = true;
+        _overlayVisible = true;
+        _status = '悬浮窗权限:已授权';
+      });
+      return;
+    } catch (_) {
+      // showOverlay 失败,落入下面的未授权引导
     }
     if (!granted) {
       if (!mounted) return;
@@ -355,24 +557,7 @@ class _HomePageState extends State<HomePage> {
         _status = '未授权:请到 设置 → 应用 → 桌面灵宠 → 显示在其他应用上层 → 允许;小米记得把"后台弹出界面"也打开';
       });
       _showPermissionGuide();
-      return;
     }
-    if (!mounted) return;
-    setState(() {
-      _permission = true;
-      _status = '悬浮窗权限:已授权';
-    });
-    await FlutterOverlayWindow.showOverlay(
-      height: 240,
-      width: 200,
-      overlayTitle: kAppName,
-      overlayContent: '灵宠悬浮窗',
-      flag: OverlayFlag.defaultFlag,
-      enableDrag: true,
-      positionGravity: PositionGravity.auto,
-    );
-    if (!mounted) return;
-    setState(() => _overlayVisible = true);
   }
 
   Future<void> _stop() async {
@@ -382,8 +567,14 @@ class _HomePageState extends State<HomePage> {
   }
 
   void _onHatchComplete() {
-    setState(() => _phase = SpiritPhase.spirit);
+    _hatchTimer?.cancel();
+    _eggBubbleTimer?.cancel();
+    setState(() {
+      _phase = SpiritPhase.spirit;
+      _eggBubble = null;
+    });
     SpiritStore.save(SpiritPhase.spirit);
+    SpiritTts.speak(kSpiritTaunts.first);
   }
 
   /// 破壳被 5 分钟倒计时拦下时提示剩余时间
@@ -391,6 +582,7 @@ class _HomePageState extends State<HomePage> {
     final sec = SpiritStore.remainingSeconds();
     final m = sec ~/ 60;
     final s = sec % 60;
+    _wiggle();
     ScaffoldMessenger.of(context).showSnackBar(
       SnackBar(
         content: Text('⏳ 蛋还在孵化中… ${m}分${s}秒后可破壳'),
@@ -489,6 +681,15 @@ class _HomePageState extends State<HomePage> {
     await SpiritState.save();
     if (!mounted) return;
     setState(() {});
+    // 蛋形态:晃蛋 + 蛋气泡,不播精灵吃饭帧
+    if (_phase == SpiritPhase.egg) {
+      _wiggle();
+      _showEggBubble('${food.emoji} 蛋壳里都闻到香味啦~ (+${food.satiety})');
+      SpiritTts.speak('谢谢主人,等我破壳出来再吃个够');
+      return;
+    }
+    // 精灵形态:主界面也播放吃饭动作序列(旧版主界面恒播 idle,看不到 eat 帧)
+    _playAction('eat', 1800);
     SpiritTts.speak('${food.name}好好吃呀,谢谢主人');
     if (!SpiritState.evo && SpiritState.feedCount >= 10) {
       setState(() => SpiritState.evo = true);
@@ -585,12 +786,41 @@ class _HomePageState extends State<HomePage> {
           child: Column(
             mainAxisSize: MainAxisSize.min,
             children: [
-              // 灵宠形象(蛋或小精灵,点击破壳)
-              SpiritAvatar(
-                phase: _phase,
-                size: 150,
-                onHatchComplete: _onHatchComplete,
-                onHatchBlocked: _onHatchBlocked,
+              // 灵宠形象(蛋或小精灵,点击破壳);蛋上方弹孵化期语音气泡
+              Stack(
+                alignment: Alignment.center,
+                clipBehavior: Clip.none,
+                children: [
+                  SpiritAvatar(
+                    phase: _phase,
+                    size: 150,
+                    evo: SpiritState.evo,
+                    action: _action,
+                    wiggleToken: _wiggleToken,
+                    onHatchComplete: _onHatchComplete,
+                    onHatchBlocked: _onHatchBlocked,
+                  ),
+                  if (_eggBubble != null)
+                    Positioned(
+                      top: -18,
+                      child: Container(
+                        constraints: const BoxConstraints(maxWidth: 250),
+                        padding: const EdgeInsets.symmetric(horizontal: 14, vertical: 8),
+                        decoration: BoxDecoration(
+                          color: Colors.white,
+                          borderRadius: BorderRadius.circular(16),
+                          boxShadow: const [
+                            BoxShadow(color: Colors.black26, blurRadius: 8),
+                          ],
+                        ),
+                        child: Text(
+                          _eggBubble!,
+                          style: const TextStyle(fontSize: 13, color: Colors.black87),
+                          textAlign: TextAlign.center,
+                        ),
+                      ),
+                    ),
+                ],
               ),
               const SizedBox(height: 16),
               Text(kAppName, style: theme.textTheme.headlineMedium),
@@ -785,7 +1015,7 @@ class SpriteAnim extends StatefulWidget {
   const SpriteAnim({
     super.key,
     required this.dir,
-    this.fps = 8,
+    this.fps = 6,
     this.fit = BoxFit.contain,
   });
   final String dir;
@@ -821,9 +1051,12 @@ class _SpriteAnimState extends State<SpriteAnim>
   void initState() {
     super.initState();
     _frames = _counts[widget.dir] ?? 1;
+    // 修复频闪:整轮时长 = 帧数 × 每帧间隔(旧版误用 1000/fps 作为整轮时长,
+    // 导致 N 帧在 1000/fps 内跑完、每帧只有正确时长的 1/N,看起来疯狂闪烁)。
+    final perFrame = (1000 / widget.fps).round();
     _c = AnimationController(
       vsync: this,
-      duration: Duration(milliseconds: (1000 ~/ widget.fps).clamp(50, 500)),
+      duration: Duration(milliseconds: (perFrame * _frames).clamp(200, 8000)),
     );
     _c.addListener(() {
       final idx = (_c.value * _frames).floor() % _frames;
@@ -862,6 +1095,7 @@ class SpiritAvatar extends StatefulWidget {
     this.evo = false,
     this.sleep = false,
     this.action,
+    this.wiggleToken = 0,
   });
 
   final SpiritPhase phase;
@@ -876,12 +1110,15 @@ class SpiritAvatar extends StatefulWidget {
   /// 互动动作序列: eat / happy / talk / angry / dance / roll / hungry / evolve
   final String? action;
 
+  /// 蛋形态小动作触发令牌:父级每次 +1,蛋就轻晃/蹦一下(孵化期撒娇用)
+  final int wiggleToken;
+
   @override
   State<SpiritAvatar> createState() => _SpiritAvatarState();
 }
 
 class _SpiritAvatarState extends State<SpiritAvatar>
-    with SingleTickerProviderStateMixin {
+    with TickerProviderStateMixin {
   bool _hatching = false;
   bool _justHatched = false;
 
@@ -895,10 +1132,25 @@ class _SpiritAvatarState extends State<SpiritAvatar>
     duration: const Duration(milliseconds: 2200),
   );
 
+  /// 蛋形态轻晃/蹦跳小动作(孵化期撒娇触发)
+  late final AnimationController _wig = AnimationController(
+    vsync: this,
+    duration: const Duration(milliseconds: 560),
+  );
+
+  @override
+  void didUpdateWidget(covariant SpiritAvatar oldWidget) {
+    super.didUpdateWidget(oldWidget);
+    if (widget.wiggleToken != oldWidget.wiggleToken && widget.wiggleToken > 0) {
+      _wig.forward(from: 0);
+    }
+  }
+
   @override
   void dispose() {
     _idle.dispose();
     _hatch.dispose();
+    _wig.dispose();
     super.dispose();
   }
 
@@ -949,7 +1201,7 @@ class _SpiritAvatarState extends State<SpiritAvatar>
               child: SizedBox(
                 width: s,
                 height: s * 1.15,
-                child: SpriteAnim(dir: dir, fps: dir == 'talk' || dir == 'angry' ? 6 : 8),
+                child: SpriteAnim(dir: dir, fps: dir == 'talk' || dir == 'angry' ? 5 : 6),
               ),
             ),
           );
@@ -1005,7 +1257,7 @@ class _SpiritAvatarState extends State<SpiritAvatar>
                     child: SizedBox(
                       width: s,
                       height: s * 1.15,
-                      child: SpriteAnim(dir: 'idle', fps: 8),
+                      child: SpriteAnim(dir: 'idle', fps: 6),
                     ),
                   ),
                 ),
@@ -1019,12 +1271,19 @@ class _SpiritAvatarState extends State<SpiritAvatar>
     return GestureDetector(
       onTap: _startHatch,
       child: AnimatedBuilder(
-        animation: _idle,
+        animation: Listenable.merge([_idle, _wig]),
         builder: (context, child) {
           final t = _idle.value;
+          final w = _wig.value;
+          // 轻晃:左右摇摆,幅度随动作收尾衰减;蹦跳:先上后下
+          final rot = math.sin(w * math.pi * 3) * 0.16 * (1 - w);
+          final hop = -math.sin(w * math.pi) * 16;
           return Transform.translate(
-            offset: Offset(0, -t * 10),
-            child: Transform.scale(scale: 1 + t * 0.04, child: child),
+            offset: Offset(0, -t * 10 + hop),
+            child: Transform.rotate(
+              angle: rot,
+              child: Transform.scale(scale: 1 + t * 0.04, child: child),
+            ),
           );
         },
         child: SizedBox(
@@ -1299,6 +1558,8 @@ class _SpiritOverlayState extends State<SpiritOverlay>
   bool _panelOpen = false;
   String? _action;
   Timer? _actionTimer;
+  Timer? _hatchTimer;
+  int _wiggleToken = 0;
 
   static const double _bigW = 200;
   static const double _bigH = 240;
@@ -1335,7 +1596,50 @@ class _SpiritOverlayState extends State<SpiritOverlay>
     _checkSleep();
     _decayTimer = Timer.periodic(const Duration(seconds: 30), (_) => _onDecay());
     _boredTimer = Timer.periodic(const Duration(seconds: 60), (_) => _onBored());
+    _startHatchChatter();
     _resetAutoHide();
+  }
+
+  /// 孵化期(蛋形态 5 分钟):每 10 秒一次倒计时/撒娇台词 + 语音 + 蛋小动作
+  void _startHatchChatter() {
+    _hatchTimer?.cancel();
+    HatchChatter.reset();
+    if (_phase != SpiritPhase.egg) return;
+    // 开场 3 秒后先打个招呼
+    Timer(const Duration(seconds: 3), () {
+      if (mounted && _phase == SpiritPhase.egg) {
+        _showBubble('主人,我在蛋里啦,5 分钟后破壳,记得喂我呀~', const Duration(seconds: 4));
+        SpiritTts.speak('主人,我在蛋里啦,记得喂我呀');
+        _wiggle();
+      }
+    });
+    _hatchTimer = Timer.periodic(const Duration(seconds: 10), (_) {
+      if (!mounted || _phase != SpiritPhase.egg) {
+        _hatchTimer?.cancel();
+        return;
+      }
+      final remain = SpiritStore.remainingSeconds();
+      final line = HatchChatter.tick(remain);
+      if (line.isNotEmpty) {
+        _showBubble(line, const Duration(seconds: 4));
+        SpiritTts.speak(line);
+        _wiggle();
+      }
+    });
+  }
+
+  /// 蛋轻晃/蹦一下
+  void _wiggle() {
+    if (!mounted) return;
+    setState(() => _wiggleToken++);
+  }
+
+  void _showBubble(String text, Duration dur) {
+    _bubbleTimer?.cancel();
+    setState(() => _bubble = text);
+    _bubbleTimer = Timer(dur, () {
+      if (mounted) setState(() => _bubble = null);
+    });
   }
 
   @override
@@ -1346,6 +1650,7 @@ class _SpiritOverlayState extends State<SpiritOverlay>
     _autoHideTimer?.cancel();
     _panelTimer?.cancel();
     _actionTimer?.cancel();
+    _hatchTimer?.cancel();
     _overlaySub?.cancel();
     super.dispose();
   }
@@ -1448,6 +1753,8 @@ class _SpiritOverlayState extends State<SpiritOverlay>
   /// 长时间不动:小文字弹窗 + 语音吐槽(40 秒起)
   void _onBored() {
     if (!_loaded || _sleeping) return;
+    // 蛋形态的撒娇/倒计时统一交给孵化 chatter,这里不再重复播报
+    if (_phase == SpiritPhase.egg) return;
     final idle = DateTime.now().difference(SpiritState.lastInteract).inSeconds;
     if (idle < 40) return;
     SpiritState.touch();
@@ -1502,12 +1809,15 @@ class _SpiritOverlayState extends State<SpiritOverlay>
     SpiritState.feedCount++;
     await SpiritState.save();
     if (!mounted) return;
+    // 蛋形态:还没有吃饭帧,用蛋轻晃 + 台词反馈,饱腹度照常累计(破壳后保留)
+    if (_phase == SpiritPhase.egg) {
+      _wiggle();
+      _showBubble('${food.emoji} 蛋壳里都闻到香味啦~ (+${food.satiety})', const Duration(seconds: 3));
+      SpiritTts.speak('谢谢主人,等我破壳出来再吃个够');
+      return;
+    }
     _playAction('eat', 1800);
-    _bubbleTimer?.cancel();
-    setState(() => _bubble = '${food.emoji} 好好吃~(+${food.satiety})');
-    _bubbleTimer = Timer(const Duration(seconds: 3), () {
-      if (mounted) setState(() => _bubble = null);
-    });
+    _showBubble('${food.emoji} 好好吃~(+${food.satiety})', const Duration(seconds: 3));
     SpiritTts.speak('${food.name}好好吃呀,谢谢主人');
     if (!SpiritState.evo && SpiritState.feedCount >= 10) {
       await _evolve();
@@ -1534,6 +1844,7 @@ class _SpiritOverlayState extends State<SpiritOverlay>
   }
 
   void _onHatchComplete() {
+    _hatchTimer?.cancel();
     setState(() => _phase = SpiritPhase.spirit);
     SpiritStore.save(SpiritPhase.spirit);
     _bubbleTimer?.cancel();
@@ -1548,9 +1859,20 @@ class _SpiritOverlayState extends State<SpiritOverlay>
   void _onEggTap() {
     if (SpiritStore.remainingSeconds() > 0) {
       _onHatchBlocked();
+      _wiggle();
       return;
     }
     _onHatchComplete();
+  }
+
+  /// 孵化期双击蛋:撒娇一句 + 轻晃
+  void _onEggPoke() {
+    _touchAndReset();
+    final lines = HatchChatter.idleLines;
+    final line = lines[DateTime.now().millisecond % lines.length];
+    _showBubble(line, const Duration(seconds: 3));
+    SpiritTts.speak(line);
+    _wiggle();
   }
 
   /// 孵化未到时间:气泡提示剩余时间
@@ -1565,9 +1887,8 @@ class _SpiritOverlayState extends State<SpiritOverlay>
     });
   }
 
-  /// 长按:呼出操作面板(喂食+隐藏),4 秒自动收起
+  /// 长按:呼出操作面板(喂食+隐藏),4 秒自动收起;蛋形态也开放,方便孵化期喂食
   void _openPanel() {
-    if (_phase != SpiritPhase.spirit) return;
     _touchAndReset();
     _panelTimer?.cancel();
     setState(() => _panelOpen = true);
@@ -1656,6 +1977,7 @@ class _SpiritOverlayState extends State<SpiritOverlay>
                     size: miniSize,
                     evo: SpiritState.evo,
                     sleep: _sleeping,
+                    wiggleToken: _wiggleToken,
                   ),
                 ),
               ),
@@ -1715,14 +2037,15 @@ class _SpiritOverlayState extends State<SpiritOverlay>
                   top: center.dy - size * 0.62,
                   child: GestureDetector(
                     onTap: _phase == SpiritPhase.egg ? _onEggTap : _pet,
-                    onDoubleTap: _phase == SpiritPhase.egg ? null : _onTap,
-                    onLongPress: _phase == SpiritPhase.egg ? null : _openPanel,
+                    onDoubleTap: _phase == SpiritPhase.egg ? _onEggPoke : _onTap,
+                    onLongPress: _openPanel,
                     child: SpiritAvatar(
                       phase: _phase,
                       size: size,
                       evo: SpiritState.evo,
                       sleep: _sleeping,
                       action: _action,
+                      wiggleToken: _wiggleToken,
                       onHatchComplete: _onHatchComplete,
                       onHatchBlocked: _onHatchBlocked,
                     ),
