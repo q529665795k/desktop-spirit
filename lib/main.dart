@@ -1051,18 +1051,36 @@ class _SpriteAnimState extends State<SpriteAnim>
   void initState() {
     super.initState();
     _frames = _counts[widget.dir] ?? 1;
-    // 修复频闪:整轮时长 = 帧数 × 每帧间隔(旧版误用 1000/fps 作为整轮时长,
-    // 导致 N 帧在 1000/fps 内跑完、每帧只有正确时长的 1/N,看起来疯狂闪烁)。
-    final perFrame = (1000 / widget.fps).round();
     _c = AnimationController(
       vsync: this,
-      duration: Duration(milliseconds: (perFrame * _frames).clamp(200, 8000)),
+      duration: _durationFor(),
     );
     _c.addListener(() {
       final idx = (_c.value * _frames).floor() % _frames;
       if (idx != _idx) setState(() => _idx = idx);
     });
     _c.repeat();
+  }
+
+  /// 整轮时长 = 帧数 × 每帧间隔(避免 N 帧在 1000/fps 内跑完导致疯狂闪烁)
+  Duration _durationFor() {
+    final perFrame = (1000 / widget.fps).round();
+    return Duration(milliseconds: (perFrame * _frames).clamp(200, 8000));
+  }
+
+  @override
+  void didUpdateWidget(covariant SpriteAnim oldWidget) {
+    super.didUpdateWidget(oldWidget);
+    // 关键修复:dir 切换(如 idle→sleep、egg→idle)必须重算帧数与整轮时长,
+    // 否则 _frames 停留在旧值,会取到不存在的帧(如 sleep_05/idle_06~11),
+    // 表现为睡眠闪烁、破壳后显示不全、需要二次打开才正常。
+    if (oldWidget.dir != widget.dir) {
+      _frames = _counts[widget.dir] ?? 1;
+      _c.duration = _durationFor();
+      _c.value = 0;
+      setState(() => _idx = 0);
+      _c.repeat();
+    }
   }
 
   @override
@@ -1194,14 +1212,19 @@ class _SpiritAvatarState extends State<SpiritAvatar>
         builder: (context, child) {
           final t = _idle.value;
           final isAction = action != null;
+          // 睡眠时:安安静静趴着——关闭上下浮动与呼吸缩放,素材用低 fps 缓慢循环
+          final isSleeping = widget.sleep && dir == 'sleep';
           return Transform.translate(
-            offset: Offset(0, isAction ? 0 : -t * 6),
+            offset: Offset(0, (isAction || isSleeping) ? 0 : -t * 6),
             child: Transform.scale(
-              scale: isAction ? 1.0 : 1 + t * 0.02,
+              scale: (isAction || isSleeping) ? 1.0 : 1 + t * 0.02,
               child: SizedBox(
                 width: s,
                 height: s * 1.15,
-                child: SpriteAnim(dir: dir, fps: dir == 'talk' || dir == 'angry' ? 5 : 6),
+                child: SpriteAnim(
+                  dir: dir,
+                  fps: isSleeping ? 2 : (dir == 'talk' || dir == 'angry' ? 5 : 6),
+                ),
               ),
             ),
           );
@@ -2031,7 +2054,28 @@ class _SpiritOverlayState extends State<SpiritOverlay>
                       ),
                     ),
                   ),
+                // 灵宠(单击摸头 / 双击吐槽 / 长按面板;蛋形态单击破壳)
+                Positioned(
+                  left: center.dx - size / 2,
+                  top: center.dy - size * 0.62,
+                  child: GestureDetector(
+                    onTap: _phase == SpiritPhase.egg ? _onEggTap : _pet,
+                    onDoubleTap: _phase == SpiritPhase.egg ? _onEggPoke : _onTap,
+                    onLongPress: _openPanel,
+                    child: SpiritAvatar(
+                      phase: _phase,
+                      size: size,
+                      evo: SpiritState.evo,
+                      sleep: _sleeping,
+                      action: _action,
+                      wiggleToken: _wiggleToken,
+                      onHatchComplete: _onHatchComplete,
+                      onHatchBlocked: _onHatchBlocked,
+                    ),
+                  ),
+                ),
                 // 气泡:顶部横条完整显示,不再越界被切
+                // (注意:必须排在灵宠之后绘制,否则破壳台词会被精灵身体遮挡)
                 if (_bubble != null)
                   Positioned(
                     left: 8,
@@ -2059,26 +2103,6 @@ class _SpiritOverlayState extends State<SpiritOverlay>
                       ),
                     ),
                   ),
-                // 灵宠(单击摸头 / 双击吐槽 / 长按面板;蛋形态单击破壳)
-                Positioned(
-                  left: center.dx - size / 2,
-                  top: center.dy - size * 0.62,
-                  child: GestureDetector(
-                    onTap: _phase == SpiritPhase.egg ? _onEggTap : _pet,
-                    onDoubleTap: _phase == SpiritPhase.egg ? _onEggPoke : _onTap,
-                    onLongPress: _openPanel,
-                    child: SpiritAvatar(
-                      phase: _phase,
-                      size: size,
-                      evo: SpiritState.evo,
-                      sleep: _sleeping,
-                      action: _action,
-                      wiggleToken: _wiggleToken,
-                      onHatchComplete: _onHatchComplete,
-                      onHatchBlocked: _onHatchBlocked,
-                    ),
-                  ),
-                ),
                 // 饱腹度/心情细条
                 Positioned(
                   left: center.dx - 70,
