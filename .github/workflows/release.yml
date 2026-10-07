@@ -1,0 +1,79 @@
+name: release-apk
+
+on:
+  push:
+    branches: [main]
+  workflow_dispatch:
+
+jobs:
+  build:
+    runs-on: ubuntu-latest
+    steps:
+      - name: Checkout
+        uses: actions/checkout@v4
+
+      - name: Setup Flutter
+        uses: subosito/flutter-action@v2
+        with:
+          channel: stable
+          flutter-version: 3.24.3
+          cache: true
+
+      - name: Regenerate clean Android v2 skeleton
+        run: |
+          set -e
+          # 仓库历史遗留的 android/ 只有一个 AndroidManifest.xml，Gradle 工程整体缺失，
+          # 直接构建会报 "deleted Android v1 embedding"，在残缺目录上 flutter create 合并又会出空包。
+          # 彻底删掉后由 flutter create 生成一套与 Flutter 3.24.3 匹配的完整 v2 工程，再覆盖固化 Manifest。
+          rm -rf android
+          flutter create --platforms=android --org com.marvis --project-name desktop_spirit .
+          cp ci/AndroidManifest.xml android/app/src/main/AndroidManifest.xml
+          echo "=== MainActivity ==="
+          find android -name "MainActivity.kt" -o -name "MainActivity.java"
+          echo "=== applicationId / namespace ==="
+          grep -rE "applicationId|namespace" android/app/build.gradle*
+          echo "=== manifest markers ==="
+          grep -E "flutterEmbedding|OverlayService|SYSTEM_ALERT_WINDOW" android/app/src/main/AndroidManifest.xml
+
+      - name: Resolve packages
+        run: |
+          flutter clean
+          flutter pub get
+
+      - name: Verify bundle (Dart compiled + 66 PNG assets)
+        run: |
+          set -e
+          flutter build bundle --debug
+          # 1) Dart 代码必须真的编译出 kernel_blob.bin
+          test -s build/flutter_assets/kernel_blob.bin && echo "OK kernel_blob.bin present"
+          # 2) 66 张 PNG 必须全部进 bundle
+          PNG=$(find build/flutter_assets/assets -type f -name '*.png' | wc -l | tr -d ' ')
+          echo "bundle PNG count = $PNG"
+          test "$PNG" -eq 66
+          # 3) AssetManifest 不得为空 {}，且能索引到蛋帧
+          grep -q "egg_01" build/flutter_assets/AssetManifest.json
+          echo "OK AssetManifest non-empty"
+
+      - name: Build release APK
+        run: flutter build apk --release
+
+      - name: Verify APK contents
+        run: |
+          set -e
+          APK=build/app/outputs/flutter-apk/app-release.apk
+          ls -la "$APK"
+          unzip -l "$APK" > /tmp/apk.txt
+          # release 下 Dart 走 AOT，必须有 libapp.so，否则就是空壳
+          grep -q "libapp.so" /tmp/apk.txt && echo "OK libapp.so (AOT) present"
+          # flutter_assets 里 66 张 PNG 必须在
+          PNG=$(grep -cE "flutter_assets/.*\.png" /tmp/apk.txt || true)
+          echo "APK PNG count = $PNG"
+          test "$PNG" -eq 66
+          grep -q "egg_01" /tmp/apk.txt && echo "OK egg frame packaged"
+          echo "===== APK verified, not an empty shell ====="
+
+      - name: Upload APK
+        uses: actions/upload-artifact@v4
+        with:
+          name: desktop-spirit-apk
+          path: build/app/outputs/flutter-apk/app-release.apk
