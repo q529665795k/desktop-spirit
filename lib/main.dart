@@ -1549,6 +1549,7 @@ class _SpiritOverlayState extends State<SpiritOverlay>
   Timer? _boredTimer;
   Timer? _autoHideTimer;
   Timer? _panelTimer;
+  Timer? _sleepTimer;
   StreamSubscription<dynamic>? _overlaySub;
   SpiritPhase _phase = SpiritPhase.egg;
   bool _loaded = false;
@@ -1565,6 +1566,9 @@ class _SpiritOverlayState extends State<SpiritOverlay>
   static const double _bigH = 240;
   static const double _miniW = 76;
   static const double _miniH = 96;
+
+  /// 连续闲置这么久(秒)自动入睡
+  static const int _sleepIdleSeconds = 300;
 
   /// 播放一次互动动画,结束后自动回待机
   void _playAction(String dir, [int ms = 1600]) {
@@ -1593,7 +1597,7 @@ class _SpiritOverlayState extends State<SpiritOverlay>
       _phase = ph;
       _loaded = true;
     });
-    _checkSleep();
+    _startSleepWatch();
     _decayTimer = Timer.periodic(const Duration(seconds: 30), (_) => _onDecay());
     _boredTimer = Timer.periodic(const Duration(seconds: 60), (_) => _onBored());
     _startHatchChatter();
@@ -1651,30 +1655,39 @@ class _SpiritOverlayState extends State<SpiritOverlay>
     _panelTimer?.cancel();
     _actionTimer?.cancel();
     _hatchTimer?.cancel();
+    _sleepTimer?.cancel();
     _overlaySub?.cancel();
     super.dispose();
   }
 
-  /// 主 App 设置透明化后通过 shareData 实时同步
+  /// 主 App 设置透明化后通过 shareData 实时同步;原生层拖动触摸也经此通知
   void _onOverlayEvent(dynamic event) {
     if (event == null) return;
     double? op;
+    bool petTouch = false;
     try {
       if (event is String) {
         final m = jsonDecode(event);
-        if (m is Map) op = (m['opacity'] as num?)?.toDouble();
+        if (m is Map) {
+          op = (m['opacity'] as num?)?.toDouble();
+          petTouch = m['petTouch'] == true;
+        }
       } else if (event is Map) {
         op = (event['opacity'] as num?)?.toDouble();
+        petTouch = event['petTouch'] == true;
       }
     } catch (_) {}
+    if (petTouch) {
+      _wake();
+    }
     if (op != null && mounted) {
       setState(() => SpiritConfig.opacity = (op ?? 1.0).clamp(0.4, 1.0).toDouble());
     }
   }
 
-  /// 互动后重置自动隐藏计时
+  /// 互动后重置自动隐藏计时 + 唤醒
   void _touchAndReset() {
-    SpiritState.touch();
+    _wake();
     _resetAutoHide();
   }
 
@@ -1719,27 +1732,45 @@ class _SpiritOverlayState extends State<SpiritOverlay>
     _pet();
   }
 
-  void _checkSleep() {
-    final idle = DateTime.now().difference(SpiritState.lastInteract).inSeconds;
-    final shouldSleep = idle > 90;
-    if (_sleeping == shouldSleep) return;
-    _sleeping = shouldSleep;
+  /// 睡眠看门狗:连续闲置 5 分钟自动入睡;任何交互(触摸/拖动/喂食)都会重置并唤醒
+  void _startSleepWatch() {
+    _sleepTimer?.cancel();
+    _sleepTimer = Timer(const Duration(seconds: _sleepIdleSeconds), () {
+      _enterSleep();
+    });
+  }
+
+  /// 进入睡眠:播放 sleep 动画 + 入眠台词;蛋形态不入眠
+  void _enterSleep() {
+    if (_phase == SpiritPhase.egg) return;
+    if (_sleeping) return;
     if (!mounted) return;
     setState(() {
-      if (_sleeping) {
-        _bubble = '💤 Zzz…';
-      } else {
-        _bubble = null;
-      }
+      _sleeping = true;
+      _bubble = '💤 Zzz…';
     });
+    _bubbleTimer?.cancel();
+    _bubbleTimer = Timer(const Duration(seconds: 3), () {
+      if (mounted) setState(() => _bubble = null);
+    });
+    SpiritTts.speak('好困,我先睡一会啦');
+  }
+
+  /// 唤醒:清除睡眠态,重置睡眠看门狗(饥饿/心情衰减不受影响,照常进行)
+  void _wake() {
+    SpiritState.touch();
+    if (_sleeping) {
+      _sleeping = false;
+      if (mounted) setState(() {});
+    }
+    _startSleepWatch();
   }
 
   void _onDecay() {
     SpiritState.decay();
     SpiritState.save();
-    _checkSleep();
     if (!mounted) return;
-    if (SpiritState.satiety < 30) {
+    if (!_sleeping && SpiritState.satiety < 30) {
       _playAction('hungry', 1600);
       _bubbleTimer?.cancel();
       setState(() => _bubble = '🍽️ 我饿啦!快喂我~');
@@ -1773,9 +1804,6 @@ class _SpiritOverlayState extends State<SpiritOverlay>
   /// 双击/小窗点击:吐槽文字
   void _onTap() {
     _touchAndReset();
-    if (_sleeping) {
-      _sleeping = false;
-    }
     _playAction('talk', 1400);
     _bubbleTimer?.cancel();
     final pool = _phase == SpiritPhase.spirit ? kSpiritTaunts : kTaunts;
