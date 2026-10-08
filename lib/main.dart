@@ -1,16 +1,19 @@
 import 'dart:async';
 import 'dart:convert';
+import 'dart:io';
 import 'dart:math' as math;
 
 import 'package:flutter/material.dart';
 import 'package:flutter_overlay_window/flutter_overlay_window.dart';
 import 'package:shared_preferences/shared_preferences.dart';
 import 'package:flutter_tts/flutter_tts.dart';
+import 'package:image_picker/image_picker.dart';
+import 'package:path_provider/path_provider.dart';
 
 /// 品牌署名
 const String kBrand = '摸鱼基地出品';
 const String kAppName = '桌面灵宠';
-const String kVersion = 'v0.8.2';
+const String kVersion = 'v0.8.3';
 
 /// 预置吐槽短句(第5步会接系统 TTS 语音)
 const List<String> kTaunts = [
@@ -296,6 +299,9 @@ class SpiritConfig {
   static const String kAutoHideDelay = 'auto_hide_delay';
   static const String kTtsRate = 'tts_rate';
   static const String kTtsVoice = 'tts_voice';
+  static const String kRoamEnabled = 'roam_enabled';
+  static const String kEatIconEnabled = 'eat_icon_enabled';
+  static const String kCustomAvatar = 'custom_avatar_path';
 
   /// 悬浮窗透明度 0.4 ~ 1.0
   static double opacity = 1.0;
@@ -312,6 +318,15 @@ class SpiritConfig {
   /// TTS 音色:female(女声) / male(男声) / default(系统默认)
   static String ttsVoice = 'female';
 
+  /// v0.8.3 进化:满屏漫游开关
+  static bool roamEnabled = true;
+
+  /// v0.8.3 进化:吃桌面图标开关(需无障碍服务已开启)
+  static bool eatIconEnabled = true;
+
+  /// v0.8.3 进化:自定义形象图片路径(空=用内置素材)
+  static String customAvatarPath = '';
+
   static Future<void> load() async {
     final p = await SharedPreferences.getInstance();
     opacity = (p.getDouble(kOpacity) ?? 1.0).clamp(0.4, 1.0);
@@ -322,6 +337,9 @@ class SpiritConfig {
     if (ttsVoice != 'female' && ttsVoice != 'male' && ttsVoice != 'default') {
       ttsVoice = 'female';
     }
+    roamEnabled = p.getBool(kRoamEnabled) ?? true;
+    eatIconEnabled = p.getBool(kEatIconEnabled) ?? true;
+    customAvatarPath = p.getString(kCustomAvatar) ?? '';
   }
 
   static Future<void> save() async {
@@ -331,6 +349,9 @@ class SpiritConfig {
     await p.setInt(kAutoHideDelay, autoHideDelay);
     await p.setDouble(kTtsRate, ttsRate);
     await p.setString(kTtsVoice, ttsVoice);
+    await p.setBool(kRoamEnabled, roamEnabled);
+    await p.setBool(kEatIconEnabled, eatIconEnabled);
+    await p.setString(kCustomAvatar, customAvatarPath);
   }
 }
 
@@ -358,12 +379,35 @@ class SpiritState {
   static const String kFeedCount = 'feed_count';
   static const String kEvo = 'evo';
   static const String kLastInteract = 'last_interact';
+  static const String kAffinity = 'affinity';
 
   static int satiety = 80;
   static int mood = 80;
   static int feedCount = 0;
   static bool evo = false;
   static DateTime lastInteract = DateTime.now();
+
+  /// v0.8.3 成长:互动亲密度(摸头/喂食/玩耍累计,决定成长阶段)
+  static int affinity = 0;
+
+  /// v0.8.3 成长阶段:1 幼年 / 2 少年 / 3 完全体
+  /// 喂食 ≥10 次或亲密度 ≥80 → 完全体(现有 evo 素材);喂食 ≥5 次或亲密度 ≥30 → 少年
+  static int get growthStage {
+    if (evo || feedCount >= 10 || affinity >= 80) return 3;
+    if (feedCount >= 5 || affinity >= 30) return 2;
+    return 1;
+  }
+
+  static String get growthStageName {
+    switch (growthStage) {
+      case 3:
+        return '完全体';
+      case 2:
+        return '少年';
+      default:
+        return '幼年';
+    }
+  }
 
   static Future<void> load() async {
     final p = await SharedPreferences.getInstance();
@@ -375,6 +419,7 @@ class SpiritState {
     lastInteract = ts != null
         ? DateTime.fromMillisecondsSinceEpoch(ts)
         : DateTime.now();
+    affinity = p.getInt(kAffinity) ?? 0;
   }
 
   static Future<void> save() async {
@@ -384,10 +429,17 @@ class SpiritState {
     await p.setInt(kFeedCount, feedCount);
     await p.setBool(kEvo, evo);
     await p.setInt(kLastInteract, lastInteract.millisecondsSinceEpoch);
+    await p.setInt(kAffinity, affinity);
   }
 
   static void touch() {
     lastInteract = DateTime.now();
+  }
+
+  /// v0.8.3 成长:真实互动(摸头/喂食/玩耍)才加亲密度
+  static void bump(int amount) {
+    affinity = math.min(999, affinity + amount);
+    touch();
   }
 
   /// 每 30 秒衰减 1 点
@@ -417,6 +469,13 @@ class _HomePageState extends State<HomePage> with WidgetsBindingObserver {
   int _autoHideDelay = 20;
   double _ttsRate = 0.5;
   String _ttsVoice = 'female';
+
+  // v0.8.3 进化:漫游 / 吃图标 / 自定义形象 / 无障碍服务状态
+  bool _roamEnabled = true;
+  bool _eatIconEnabled = true;
+  String _customAvatarPath = '';
+  bool _a11yOn = false;
+  bool _a11yLoaded = false;
 
   // 主界面动作 / 孵化期互动
   String? _action;
@@ -509,9 +568,28 @@ class _HomePageState extends State<HomePage> with WidgetsBindingObserver {
         _autoHideDelay = SpiritConfig.autoHideDelay;
         _ttsRate = SpiritConfig.ttsRate;
         _ttsVoice = SpiritConfig.ttsVoice;
+        _roamEnabled = SpiritConfig.roamEnabled;
+        _eatIconEnabled = SpiritConfig.eatIconEnabled;
+        _customAvatarPath = SpiritConfig.customAvatarPath;
       });
     });
+    _loadA11yState();
   }
+
+  /// v0.8.3:读取无障碍服务是否已由用户在系统设置开启
+  Future<void> _loadA11yState() async {
+    final p = await SharedPreferences.getInstance();
+    final on = p.getBool('desktop_spirit_a11y_on') ?? false;
+    final iconsJson = p.getString('desktop_spirit_icons') ?? '';
+    if (!mounted) return;
+    setState(() {
+      _a11yOn = on;
+      _a11yLoaded = true;
+      _iconCount = iconsJson.isEmpty ? 0 : (jsonDecode(iconsJson) as List).length;
+    });
+  }
+
+  int _iconCount = 0;
 
   Future<void> _loadPhase() async {
     // 首次打开:记录孵化倒计时(5 分钟),之后一直沿用
@@ -654,6 +732,60 @@ class _HomePageState extends State<HomePage> with WidgetsBindingObserver {
     SpiritTts.speak('主人,我是小狐耳,这是我的新声音');
   }
 
+  // ===== v0.8.3 进化功能设置 =====
+  Future<void> _updateRoam(bool v) async {
+    SpiritConfig.roamEnabled = v;
+    await SpiritConfig.save();
+    if (!mounted) return;
+    setState(() => _roamEnabled = v);
+  }
+
+  Future<void> _updateEatIcon(bool v) async {
+    SpiritConfig.eatIconEnabled = v;
+    await SpiritConfig.save();
+    if (!mounted) return;
+    setState(() => _eatIconEnabled = v);
+  }
+
+  /// v0.8.3 自定义形象:选一张本地图片 → 校验/复制到应用私有目录 → 换皮
+  Future<void> _pickCustomAvatar() async {
+    try {
+      final picked = await ImagePicker().pickImage(
+        source: ImageSource.gallery,
+        maxWidth: 1024,
+        maxHeight: 1024,
+      );
+      if (picked == null) return;
+      final dir = await getApplicationSupportDirectory();
+      final target = File('${dir.path}${Platform.pathSeparator}custom_avatar.png');
+      await File(picked.path).copy(target.path);
+      SpiritConfig.customAvatarPath = target.path;
+      await SpiritConfig.save();
+      if (!mounted) return;
+      setState(() => _customAvatarPath = target.path);
+      ScaffoldMessenger.of(context).showSnackBar(
+        const SnackBar(content: Text('自定义形象已生效,回桌面看看灵宠~')),
+      );
+    } catch (e) {
+      if (mounted) {
+        ScaffoldMessenger.of(context).showSnackBar(
+          SnackBar(content: Text('选图失败:$e')),
+        );
+      }
+    }
+  }
+
+  /// v0.8.3 恢复内置形象
+  Future<void> _resetCustomAvatar() async {
+    SpiritConfig.customAvatarPath = '';
+    await SpiritConfig.save();
+    if (!mounted) return;
+    setState(() => _customAvatarPath = '');
+    ScaffoldMessenger.of(context).showSnackBar(
+      const SnackBar(content: Text('已恢复内置形象')),
+    );
+  }
+
   Widget _buildStats() {
     return Column(
       mainAxisSize: MainAxisSize.min,
@@ -667,10 +799,33 @@ class _HomePageState extends State<HomePage> with WidgetsBindingObserver {
           ],
         ),
         const SizedBox(height: 4),
-        if (SpiritState.evo)
-          const Text('✨ 已进化完全体', style: TextStyle(fontSize: 12, color: Color(0xFFB8860B)))
-        else
-          Text('进化进度:喂食 ${SpiritState.feedCount}/10 次', style: const TextStyle(fontSize: 12, color: Colors.grey)),
+        // v0.8.3 成长:阶段 + 亲密度
+        Row(
+          mainAxisSize: MainAxisSize.min,
+          children: [
+            Text(
+              '🌱 成长:${SpiritState.growthStageName}',
+              style: TextStyle(
+                fontSize: 12,
+                color: SpiritState.growthStage == 3
+                    ? const Color(0xFFB8860B)
+                    : (SpiritState.growthStage == 2
+                        ? const Color(0xFF7B68C8)
+                        : Colors.grey),
+              ),
+            ),
+            const SizedBox(width: 10),
+            Text('💕 亲密度 ${SpiritState.affinity}', style: const TextStyle(fontSize: 12, color: Colors.grey)),
+          ],
+        ),
+        if (SpiritState.growthStage < 3)
+          Padding(
+            padding: const EdgeInsets.only(top: 2),
+            child: Text(
+              '喂食 ${SpiritState.feedCount}/10 次 或 亲密度 ${SpiritState.affinity}/80 即可进化完全体',
+              style: const TextStyle(fontSize: 10, color: Colors.grey),
+            ),
+          ),
       ],
     );
   }
@@ -696,6 +851,7 @@ class _HomePageState extends State<HomePage> with WidgetsBindingObserver {
     SpiritState.satiety = math.min(100, SpiritState.satiety + food.satiety);
     SpiritState.mood = math.min(100, SpiritState.mood + food.mood);
     SpiritState.feedCount++;
+    SpiritState.bump(5); // v0.8.3 成长:喂食加亲密度
     await SpiritState.save();
     if (!mounted) return;
     setState(() {});
@@ -715,10 +871,15 @@ class _HomePageState extends State<HomePage> with WidgetsBindingObserver {
       ScaffoldMessenger.of(context).showSnackBar(
         const SnackBar(content: Text('✨ 进化啦!完全体形态 ✨')),
       );
+    } else if (!SpiritState.evo && SpiritState.feedCount == 5) {
+      // v0.8.3 成长:少年阶段里程碑
+      ScaffoldMessenger.of(context).showSnackBar(
+        const SnackBar(content: Text('🌱 成长啦!进入少年形态 🌱')),
+      );
     } else {
       ScaffoldMessenger.of(context).showSnackBar(
         SnackBar(
-          content: Text('喂了${food.name},饱腹度+${food.satiety}'),
+          content: Text('喂了${food.name},饱腹度+${food.satiety},亲密度+5'),
           duration: const Duration(milliseconds: 800),
         ),
       );
@@ -817,6 +978,9 @@ class _HomePageState extends State<HomePage> with WidgetsBindingObserver {
                     wiggleToken: _wiggleToken,
                     onHatchComplete: _onHatchComplete,
                     onHatchBlocked: _onHatchBlocked,
+                    customImagePath: _customAvatarPath.isEmpty
+                        ? null
+                        : _customAvatarPath,
                   ),
                   if (_eggBubble != null)
                     Positioned(
@@ -998,6 +1162,93 @@ class _HomePageState extends State<HomePage> with WidgetsBindingObserver {
                 ),
               ),
               const SizedBox(height: 16),
+              // v0.8.3 进化功能:漫游 / 吃图标(无障碍) / 自定义形象
+              Card(
+                margin: EdgeInsets.zero,
+                child: Padding(
+                  padding: const EdgeInsets.all(14),
+                  child: Column(
+                    mainAxisSize: MainAxisSize.min,
+                    crossAxisAlignment: CrossAxisAlignment.start,
+                    children: [
+                      Row(
+                        children: [
+                          const Icon(Icons.auto_awesome, size: 16, color: Colors.grey),
+                          const SizedBox(width: 6),
+                          Text('进化功能', style: theme.textTheme.titleSmall),
+                        ],
+                      ),
+                      const SizedBox(height: 12),
+                      Row(
+                        children: [
+                          const Text('满屏自由漫游', style: TextStyle(fontSize: 13)),
+                          const Spacer(),
+                          Switch(
+                            value: _roamEnabled,
+                            onChanged: _updateRoam,
+                          ),
+                        ],
+                      ),
+                      const SizedBox(height: 2),
+                      Row(
+                        children: [
+                          const Text('吃桌面图标(需无障碍)', style: TextStyle(fontSize: 13)),
+                          const Spacer(),
+                          Switch(
+                            value: _eatIconEnabled,
+                            onChanged: _updateEatIcon,
+                          ),
+                        ],
+                      ),
+                      const SizedBox(height: 8),
+                      // 无障碍服务状态
+                      Container(
+                        width: double.infinity,
+                        padding: const EdgeInsets.all(10),
+                        decoration: BoxDecoration(
+                          color: (_a11yOn ? const Color(0x1A4CAF50) : const Color(0x1AFF9800)),
+                          borderRadius: BorderRadius.circular(8),
+                        ),
+                        child: Text(
+                          _a11yLoaded
+                              ? (_a11yOn
+                                  ? '✅ 桌面感知已开启,已识别 $_iconCount 个桌面图标'
+                                  : '⚠️ 桌面感知未开启:去 系统设置 → 无障碍 → 桌面灵宠 → 打开「桌面灵宠感知」,再回到桌面就能看它吃图标了')
+                              : '读取无障碍状态中…',
+                          style: const TextStyle(fontSize: 11.5),
+                        ),
+                      ),
+                      const SizedBox(height: 8),
+                      Row(
+                        children: [
+                          const Text('自定义形象', style: TextStyle(fontSize: 13)),
+                          const Spacer(),
+                          TextButton.icon(
+                            onPressed: _pickCustomAvatar,
+                            icon: const Icon(Icons.photo_library_outlined, size: 16),
+                            label: const Text('选图片换皮'),
+                          ),
+                          if (_customAvatarPath.isNotEmpty)
+                            TextButton.icon(
+                              onPressed: _resetCustomAvatar,
+                              icon: const Icon(Icons.restart_alt, size: 16),
+                              label: const Text('恢复默认'),
+                            ),
+                        ],
+                      ),
+                      if (_customAvatarPath.isNotEmpty)
+                        const Padding(
+                          padding: EdgeInsets.only(bottom: 4),
+                          child: Text(
+                            '当前使用自定义形象(静态图,建议透明底 PNG)',
+                            style: TextStyle(fontSize: 11, color: Colors.grey),
+                          ),
+                        ),
+                    ],
+                  ),
+                ),
+              ),
+              const SizedBox(height: 16),
               FilledButton.icon(
                 onPressed: _start,
                 icon: const Icon(Icons.pets),
@@ -1132,6 +1383,7 @@ class SpiritAvatar extends StatefulWidget {
     this.sleep = false,
     this.action,
     this.wiggleToken = 0,
+    this.customImagePath,
   });
 
   final SpiritPhase phase;
@@ -1148,6 +1400,9 @@ class SpiritAvatar extends StatefulWidget {
 
   /// 蛋形态小动作触发令牌:父级每次 +1,蛋就轻晃/蹦一下(孵化期撒娇用)
   final int wiggleToken;
+
+  /// v0.8.3 自定义形象:本地图片绝对路径,非空时小精灵形态用这张图换皮(静态)
+  final String? customImagePath;
 
   @override
   State<SpiritAvatar> createState() => _SpiritAvatarState();
@@ -1174,11 +1429,29 @@ class _SpiritAvatarState extends State<SpiritAvatar>
     duration: const Duration(milliseconds: 560),
   );
 
+  /// v0.8.3 睡眠 ZZZ 动画:一个Z→两个Z→三个Z→抹掉→循环,慢帧率
+  /// 每阶段约 0.9s,整轮 3.6s,比一般动效慢一半,看着像真的在打呼
+  late final AnimationController _zzz = AnimationController(
+    vsync: this,
+    duration: const Duration(milliseconds: 3600),
+  );
+
   @override
   void didUpdateWidget(covariant SpiritAvatar oldWidget) {
     super.didUpdateWidget(oldWidget);
     if (widget.wiggleToken != oldWidget.wiggleToken && widget.wiggleToken > 0) {
       _wig.forward(from: 0);
+    }
+    // 睡眠切换时控制 ZZZ 动画的启停(避免不睡觉时也在跑动画)
+    final sleepingNow = widget.sleep && widget.phase == SpiritPhase.spirit;
+    final sleepingBefore = oldWidget.sleep && oldWidget.phase == SpiritPhase.spirit;
+    if (sleepingNow != sleepingBefore) {
+      if (sleepingNow) {
+        _zzz.repeat();
+      } else {
+        _zzz.stop();
+        _zzz.value = 0;
+      }
     }
   }
 
@@ -1187,6 +1460,7 @@ class _SpiritAvatarState extends State<SpiritAvatar>
     _idle.dispose();
     _hatch.dispose();
     _wig.dispose();
+    _zzz.dispose();
     super.dispose();
   }
 
@@ -1225,6 +1499,8 @@ class _SpiritAvatarState extends State<SpiritAvatar>
       } else if (widget.sleep) {
         dir = 'sleep';
       }
+      final custom =
+          widget.customImagePath != null && widget.customImagePath!.isNotEmpty;
       return AnimatedBuilder(
         animation: _idle,
         builder: (context, child) {
@@ -1241,19 +1517,38 @@ class _SpiritAvatarState extends State<SpiritAvatar>
                 width: s,
                 height: s * 1.15,
                 child: isSleeping
-                    ? Transform.scale(
-                        scale: 1 + t * 0.015,
-                        child: Image.asset(
-                          'assets/sleep/sleep_02.png',
-                          fit: BoxFit.contain,
-                          gaplessPlayback: true,
-                          errorBuilder: (_, __, ___) => const SizedBox.shrink(),
-                        ),
+                    // v0.8.3:睡眠态 = 静态团球帧 + 呼吸缩放 + 动态 ZZZ 动画(一个→两个→三个→抹掉→循环)
+                    ? Stack(
+                        alignment: Alignment.center,
+                        children: [
+                          Transform.scale(
+                            scale: 1 + t * 0.015,
+                            child: Image.asset(
+                              'assets/sleep/sleep_02.png',
+                              fit: BoxFit.contain,
+                              gaplessPlayback: true,
+                              errorBuilder: (_, __, ___) =>
+                                  const SizedBox.shrink(),
+                            ),
+                          ),
+                          _ZzzOverlay(controller: _zzz, size: s),
+                        ],
                       )
-                    : SpriteAnim(
-                        dir: dir,
-                        fps: dir == 'talk' || dir == 'angry' ? 5 : 6,
-                      ),
+                    : custom
+                        ? Transform.scale(
+                            scale: 1 + t * 0.02,
+                            child: Image.file(
+                              File(widget.customImagePath!),
+                              fit: BoxFit.contain,
+                              gaplessPlayback: true,
+                              errorBuilder: (_, __, ___) =>
+                                  const SizedBox.shrink(),
+                            ),
+                          )
+                        : SpriteAnim(
+                            dir: dir,
+                            fps: dir == 'talk' || dir == 'angry' ? 5 : 6,
+                          ),
               ),
             ),
           );
@@ -1351,6 +1646,57 @@ class _SpiritAvatarState extends State<SpiritAvatar>
           ),
         ),
       ),
+    );
+  }
+}
+
+/// v0.8.3 睡眠 ZZZ 呼吸动画:一个Z→两个Z→三个Z→抹掉→循环(慢帧率,约 3.6s 一轮)
+class _ZzzOverlay extends StatelessWidget {
+  const _ZzzOverlay({required this.controller, required this.size});
+
+  final AnimationController controller;
+  final double size;
+
+  @override
+  Widget build(BuildContext context) {
+    return AnimatedBuilder(
+      animation: controller,
+      builder: (context, child) {
+        final t = controller.value;
+        // 四段:0~0.25 一个Z / 0.25~0.5 两个Z / 0.5~0.75 三个Z / 0.75~1 抹掉
+        final phase = (t * 4).floor().clamp(0, 3);
+        final within = (t * 4) - phase; // 每段内进度 0~1
+        final zCount = phase + 1;
+        // 段内渐变:前 3 段由淡到浓,最后一段抹掉(1→0)
+        final opacity = phase == 3 ? 1.0 - within : 0.3 + within * 0.7;
+        final base = size * 0.05;
+        // 三个 Z 依次向右上飘,越后面的越大越淡,像打呼时的气音
+        return IgnorePointer(
+          child: Stack(
+            children: [
+              for (var i = 0; i < zCount; i++)
+                Positioned(
+                  right: size * (0.02 + i * 0.06),
+                  top: -size * (0.04 + i * 0.10) - 4,
+                  child: Opacity(
+                    opacity: opacity * (i == 0 ? 1.0 : 0.72),
+                    child: Text(
+                      'Z',
+                      style: TextStyle(
+                        fontSize: base * (2 + i),
+                        fontWeight: FontWeight.bold,
+                        color: const Color(0xFF8E7CC3),
+                        shadows: const [
+                          Shadow(color: Colors.black26, blurRadius: 2),
+                        ],
+                      ),
+                    ),
+                  ),
+                ),
+            ],
+          ),
+        );
+      },
     );
   }
 }
@@ -1604,6 +1950,9 @@ class _SpiritOverlayState extends State<SpiritOverlay>
   Timer? _autoHideTimer;
   Timer? _panelTimer;
   Timer? _sleepTimer;
+  Timer? _roamTimer;
+  Timer? _iconTimer;
+  Timer? _a11yTimer;
   StreamSubscription<dynamic>? _overlaySub;
   SpiritPhase _phase = SpiritPhase.egg;
   bool _loaded = false;
@@ -1615,6 +1964,34 @@ class _SpiritOverlayState extends State<SpiritOverlay>
   Timer? _actionTimer;
   Timer? _hatchTimer;
   int _wiggleToken = 0;
+
+  // ===== v0.8.3 进化:漫游 / 吃图标 / 无障碍 / 时间感知 =====
+  /// 当前窗口宽度(dp),跟随大/迷你窗切换
+  double _winW = 200;
+
+  /// 屏幕物理宽度(dp),漫游边界用(悬浮窗服务返回)
+  double _screenW = 0;
+
+  /// 漫游当前位置:窗口绝对左缘(dp)
+  double _roamX = 0;
+
+  /// 漫游方向:1 向右 / -1 向左
+  int _roamDir = 1;
+
+  /// 漫游休息 tick 计数(>0 时原地待着)
+  int _roamPause = 0;
+
+  /// 是否正在漫游移动中
+  bool _roaming = false;
+
+  /// 是否正在去吃图标的路上(优先于漫游)
+  bool _goingToIcon = false;
+
+  /// 无障碍服务识别到的桌面图标坐标(px,来自原生服务写 SharedPreferences)
+  List<Map<String, dynamic>> _icons = [];
+
+  /// 无障碍服务是否已由用户在系统设置开启
+  bool _a11yOn = false;
 
   static const double _bigW = 200;
   static const double _bigH = 240;
@@ -1651,9 +2028,18 @@ class _SpiritOverlayState extends State<SpiritOverlay>
       _phase = ph;
       _loaded = true;
     });
+    _winW = _bigW;
+    // v0.8.3:拿屏幕尺寸供漫游边界使用;悬浮窗服务刚启动可能还没就绪,取不到就等漫游 tick 时再试
+    final size = await FlutterOverlayWindow.getScreenSize();
+    if (size != null && size.width > 0) _screenW = size.width;
     _startSleepWatch();
     _decayTimer = Timer.periodic(const Duration(seconds: 30), (_) => _onDecay());
     _boredTimer = Timer.periodic(const Duration(seconds: 60), (_) => _onBored());
+    // v0.8.3 进化:慢速漫游 tick(1.2s)+ 吃图标调度(25s)+ 无障碍状态轮询(10s)
+    _roamTimer = Timer.periodic(const Duration(milliseconds: 1200), (_) => _onRoamTick());
+    _iconTimer = Timer.periodic(const Duration(seconds: 25), (_) => _maybeEatIcon());
+    _a11yTimer = Timer.periodic(const Duration(seconds: 10), (_) => _refreshA11y());
+    _refreshA11y();
     _startHatchChatter();
     _resetAutoHide();
   }
@@ -1710,13 +2096,170 @@ class _SpiritOverlayState extends State<SpiritOverlay>
     _actionTimer?.cancel();
     _hatchTimer?.cancel();
     _sleepTimer?.cancel();
+    _roamTimer?.cancel();
+    _iconTimer?.cancel();
+    _a11yTimer?.cancel();
     _overlaySub?.cancel();
     super.dispose();
   }
 
+  // ===== v0.8.3 进化:漫游 / 吃图标 / 无障碍 / 时间感知 =====
+
+  /// 无障碍服务状态轮询:读原生服务写的 SharedPreferences(桌面图标坐标 + 服务开关)
+  Future<void> _refreshA11y() async {
+    try {
+      final p = await SharedPreferences.getInstance();
+      final on = p.getBool('desktop_spirit_a11y_on') ?? false;
+      final jsonStr = p.getString('desktop_spirit_icons') ?? '';
+      List<Map<String, dynamic>> icons = [];
+      if (jsonStr.isNotEmpty) {
+        final list = jsonDecode(jsonStr) as List;
+        icons = list
+            .map((e) => (e as Map).cast<String, dynamic>())
+            .toList();
+      }
+      if (!mounted) return;
+      setState(() {
+        _a11yOn = on;
+        _icons = icons;
+      });
+    } catch (_) {}
+  }
+
+  /// 漫游 tick:慢速左右走动,贴边反向,偶尔停下来歇口气
+  void _onRoamTick() {
+    if (!mounted || !_loaded) return;
+    if (_phase != SpiritPhase.spirit) return;
+    if (!SpiritConfig.roamEnabled) return;
+    if (_mini || _sleeping || _action != null || _panelOpen) return;
+    if (_goingToIcon) return;
+    // 用户刚互动过(12 秒内)不自主移动,免得打扰
+    if (DateTime.now().difference(SpiritState.lastInteract).inSeconds < 12) {
+      return;
+    }
+    // 休息计数:原地待着
+    if (_roamPause > 0) {
+      _roamPause--;
+      return;
+    }
+    // 20% 概率停下歇 2~4 拍
+    if (_randomInt(100) < 20) {
+      _roamPause = 2 + _randomInt(3);
+      return;
+    }
+    _moveRoam();
+  }
+
+  Future<void> _moveRoam() async {
+    if (_roaming) return;
+    if (_screenW <= 0) {
+      // 悬浮窗服务还没就绪:再取一次屏幕尺寸
+      final size = await FlutterOverlayWindow.getScreenSize();
+      if (size == null || size.width <= 0) return;
+      _screenW = size.width;
+    }
+    _roaming = true;
+    try {
+      final w = _winW;
+      // 每 tick 移动 6~14dp,慢速游走
+      final step = 6.0 + _randomInt(9);
+      var nx = _roamX + _roamDir * step;
+      // 左右边界各留 5dp
+      if (nx < 5) {
+        nx = 5;
+        _roamDir = 1;
+      }
+      if (nx > _screenW - w - 5) {
+        nx = math.max(5.0, _screenW - w - 5);
+        _roamDir = -1;
+      }
+      // 20% 概率转向
+      if (_randomInt(100) < 20) _roamDir = -_roamDir;
+      _roamX = nx;
+      // CENTER 重力:paramX = 绝对左缘 - 屏中心 + 窗口宽/2
+      final paramX = nx - _screenW / 2 + w / 2;
+      await FlutterOverlayWindow.moveOverlay(OverlayPosition(paramX, 200));
+    } catch (_) {}
+    _roaming = false;
+  }
+
+  /// 吃桌面图标调度:无障碍已开启 + 有图标坐标时,随机扑一个图标"啊呜"一口
+  Future<void> _maybeEatIcon() async {
+    if (!mounted || !_loaded) return;
+    if (_phase != SpiritPhase.spirit) return;
+    if (!SpiritConfig.eatIconEnabled || !_a11yOn) return;
+    if (_mini || _sleeping || _panelOpen || _goingToIcon) return;
+    if (DateTime.now().difference(SpiritState.lastInteract).inSeconds < 15) {
+      return;
+    }
+    if (_icons.isEmpty) return;
+    final icon = _icons[_randomInt(_icons.length)];
+    final iconX = (icon['x'] as num?)?.toDouble() ?? 0;
+    final iconY = (icon['y'] as num?)?.toDouble() ?? 0;
+    if (iconX <= 0 || iconY <= 0) return;
+    if (_screenW <= 0) return;
+    // 图标坐标是 px,悬浮窗的 devicePixelRatio = 系统屏幕密度,换算成 dp
+    final density = MediaQuery.of(context).devicePixelRatio;
+    final iconXdp = iconX / density;
+    // 目标绝对左缘:把窗口中心对准图标中心(只动水平,垂直保持现状 y=200,避免屏高未知导致飞出屏幕)
+    final left = (iconXdp - _winW / 2).clamp(5.0, math.max(5.0, _screenW - _winW - 5));
+    final paramX = left - _screenW / 2 + _winW / 2;
+    _goingToIcon = true;
+    _bubbleTimer?.cancel();
+    setState(() => _bubble = '🗑️ 看到图标啦,冲!');
+    _bubbleTimer = Timer(const Duration(seconds: 2), () {
+      if (mounted) setState(() => _bubble = null);
+    });
+    try {
+      await FlutterOverlayWindow.moveOverlay(OverlayPosition(paramX, 200));
+      await Future.delayed(const Duration(milliseconds: 500));
+      if (!mounted) return;
+      // 到达:吃/扑动作(假动作——图标本身是系统渲染的,吃不动,做互动效果)
+      _playAction('eat', 1800);
+      _bubbleTimer?.cancel();
+      setState(() => _bubble = '啊呜~ 吃掉啦!(假动作,图标还在呢)');
+      _bubbleTimer = Timer(const Duration(seconds: 3), () {
+        if (mounted) setState(() => _bubble = null);
+      });
+      SpiritTts.speak('啊呜,好好玩!');
+      SpiritState.bump(3);
+      await SpiritState.save();
+      // 吃完溜回左边歇着
+      await Future.delayed(const Duration(seconds: 4));
+      if (!mounted) return;
+      final restX = 5.0 + _randomInt(60).toDouble();
+      final px = restX - _screenW / 2 + _winW / 2;
+      await FlutterOverlayWindow.moveOverlay(OverlayPosition(px, 200));
+      _roamX = restX;
+    } catch (_) {}
+    _goingToIcon = false;
+    _touchAndReset();
+  }
+
+  /// v0.8.3 时间感知:按当前时段返回问候台词
+  String _timeGreeting() {
+    final h = DateTime.now().hour;
+    if (h >= 5 && h < 9) return '主人早上好,又是元气满满的一天!';
+    if (h >= 9 && h < 12) return '上午好呀,摸摸头~';
+    if (h >= 12 && h < 14) return '午安~吃饱了再睡会儿?';
+    if (h >= 14 && h < 18) return '下午好,陪我玩会儿嘛';
+    if (h >= 18 && h < 23) return '晚上好呀,今天辛苦啦';
+    return '夜深了,主人早点睡,我陪着你~';
+  }
+
+  /// v0.8.3 时间感知:按时段返回闲聊吐槽(混入总池)
+  String? _timeTaunt() {
+    final h = DateTime.now().hour;
+    if (h >= 5 && h < 9) return '太阳公公出来啦,该起床干活啦';
+    if (h >= 9 && h < 12) return '上午效率最高,冲鸭!';
+    if (h >= 12 && h < 14) return '中午啦,记得吃午饭哦';
+    if (h >= 14 && h < 18) return '下午容易犯困,站起来活动下';
+    if (h >= 18 && h < 23) return '晚饭吃了吗?别饿着自己';
+    return '这么晚还不睡,修仙呢?';
+  }
+
   /// 主 App 设置透明化后通过 shareData 实时同步;原生层拖动触摸也经此通知
-  void _onOverlayEvent(dynamic event) {
-    if (event == null) return;
+  void _onOverlayEvent(dynamic event) {    if (event == null) return;
     double? op;
     bool petTouch = false;
     try {
@@ -1766,6 +2309,7 @@ class _SpiritOverlayState extends State<SpiritOverlay>
       if (mounted) setState(() => _bubble = null);
     });
     await FlutterOverlayWindow.resizeOverlay(_miniW.toInt(), _miniH.toInt(), true);
+    _winW = _miniW;
     // 贴边后自动回中间修复:gravity=CENTER 时 params.x 是相对屏幕中心的偏移,
     // x=0 会把窗口水平居中;这里用 15% 窗口宽(76×0.15≈11dp)让迷你窗贴住屏幕左缘
     await FlutterOverlayWindow.moveOverlay(OverlayPosition(_miniW * 0.15, 160));
@@ -1778,6 +2322,7 @@ class _SpiritOverlayState extends State<SpiritOverlay>
     _bubble = null;
     setState(() {});
     await FlutterOverlayWindow.resizeOverlay(_bigW.toInt(), _bigH.toInt(), true);
+    _winW = _bigW;
     await FlutterOverlayWindow.moveOverlay(const OverlayPosition(60, 180));
     _resetAutoHide();
   }
@@ -1846,8 +2391,14 @@ class _SpiritOverlayState extends State<SpiritOverlay>
     if (idle < 40) return;
     SpiritState.touch();
     _resetAutoHide();
-    final pool = _phase == SpiritPhase.spirit ? kSpiritTaunts : kTaunts;
-    final text = pool[_randomInt(pool.length)];
+    // v0.8.3 时间感知:约 1/3 概率说时段相关的话
+    String text;
+    if (_randomInt(3) == 0) {
+      text = _timeTaunt() ?? kSpiritTaunts[_randomInt(kSpiritTaunts.length)];
+    } else {
+      final pool = _phase == SpiritPhase.spirit ? kSpiritTaunts : kTaunts;
+      text = pool[_randomInt(pool.length)];
+    }
     if (!mounted) return;
     _bubbleTimer?.cancel();
     setState(() => _bubble = text);
@@ -1875,11 +2426,12 @@ class _SpiritOverlayState extends State<SpiritOverlay>
   Future<void> _pet() async {
     _touchAndReset();
     SpiritState.mood = math.min(100, SpiritState.mood + 10);
+    SpiritState.bump(2); // v0.8.3 成长:互动加亲密度
     await SpiritState.save();
     if (!mounted) return;
     _playAction('happy', 1400);
     _bubbleTimer?.cancel();
-    setState(() => _bubble = '💗 摸摸头~心情+10');
+    setState(() => _bubble = '💗 摸摸头~心情+10 亲密度+2');
     _bubbleTimer = Timer(const Duration(seconds: 3), () {
       if (mounted) setState(() => _bubble = null);
     });
@@ -1891,6 +2443,7 @@ class _SpiritOverlayState extends State<SpiritOverlay>
     SpiritState.satiety = math.min(100, SpiritState.satiety + food.satiety);
     SpiritState.mood = math.min(100, SpiritState.mood + food.mood);
     SpiritState.feedCount++;
+    SpiritState.bump(5); // v0.8.3 成长:喂食加亲密度
     await SpiritState.save();
     if (!mounted) return;
     // 蛋形态:还没有吃饭帧,用蛋轻晃 + 台词反馈,饱腹度照常累计(破壳后保留)
@@ -1932,11 +2485,13 @@ class _SpiritOverlayState extends State<SpiritOverlay>
     setState(() => _phase = SpiritPhase.spirit);
     SpiritStore.save(SpiritPhase.spirit);
     _bubbleTimer?.cancel();
-    setState(() => _bubble = kSpiritTaunts.first);
+    // v0.8.3 时间感知:破壳后先按时段打招呼
+    final greeting = _timeGreeting();
+    setState(() => _bubble = greeting);
     _bubbleTimer = Timer(const Duration(seconds: 3), () {
       if (mounted) setState(() => _bubble = null);
     });
-    SpiritTts.speak(kSpiritTaunts.first);
+    SpiritTts.speak(greeting);
   }
 
   /// 悬浮窗里点蛋:先过 5 分钟孵化倒计时
@@ -2075,6 +2630,9 @@ class _SpiritOverlayState extends State<SpiritOverlay>
                     evo: SpiritState.evo,
                     sleep: _sleeping,
                     wiggleToken: _wiggleToken,
+                    customImagePath: SpiritConfig.customAvatarPath.isEmpty
+                        ? null
+                        : SpiritConfig.customAvatarPath,
                   ),
                 ),
               ),
@@ -2117,6 +2675,9 @@ class _SpiritOverlayState extends State<SpiritOverlay>
                       wiggleToken: _wiggleToken,
                       onHatchComplete: _onHatchComplete,
                       onHatchBlocked: _onHatchBlocked,
+                      customImagePath: SpiritConfig.customAvatarPath.isEmpty
+                          ? null
+                          : SpiritConfig.customAvatarPath,
                     ),
                   ),
                 ),

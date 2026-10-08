@@ -4,6 +4,8 @@
     <uses-permission android:name="android.permission.FOREGROUND_SERVICE_SPECIAL_USE" />
     <uses-permission android:name="android.permission.POST_NOTIFICATIONS" />
     <uses-permission android:name="android.permission.WAKE_LOCK" />
+    <!-- v0.8.3 吃桌面图标:无障碍服务读取桌面图标坐标(权限由用户在系统设置手动开启) -->
+    <uses-permission android:name="android.permission.BIND_ACCESSIBILITY_SERVICE" />
 
     <application
         android:label="桌面灵宠"
@@ -40,6 +42,21 @@
             <property
                 android:name="android.app.PROPERTY_SPECIAL_USE_FGS_SUBTYPE"
                 android:value="desktop_pet_overlay" />
+        </service>
+
+        <!-- v0.8.3 吃桌面图标:无障碍服务读取桌面图标坐标。
+             开启方式:系统设置 → 无障碍 → 桌面灵宠 → 打开「桌面灵宠感知」(系统强制用户手动授权)。
+             图标坐标写入 SharedPreferences key=desktop_spirit_icons(JSON),供悬浮窗引擎读取。 -->
+        <service
+            android:name="com.marvis.desktop_spirit.SpiritAccessibilityService"
+            android:permission="android.permission.BIND_ACCESSIBILITY_SERVICE"
+            android:exported="false">
+            <intent-filter>
+                <action android:name="android.accessibilityservice.AccessibilityService" />
+            </intent-filter>
+            <meta-data
+                android:name="android.accessibilityservice"
+                android:resource="@xml/accessibility_service_config" />
         </service>
     </application>
 </manifest>

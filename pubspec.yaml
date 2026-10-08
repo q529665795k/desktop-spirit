@@ -1,7 +1,7 @@
 name: desktop_spirit
 description: 桌面灵宠 - 从一颗蛋破壳的狐耳少女桌面宠物(自用原创)
 publish_to: 'none'
-version: 0.8.2+12
+version: 0.8.3+13
 
 environment:
   sdk: '>=3.3.0 <4.0.0'
@@ -13,6 +13,8 @@ dependencies:
   flutter_overlay_window:
     path: packages/flutter_overlay_window
   flutter_tts: ^3.8.5
+  image_picker: ^1.1.2
+  path_provider: ^2.1.3
 
 dev_dependencies:
   flutter_test:

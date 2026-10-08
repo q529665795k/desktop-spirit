@@ -121,6 +121,8 @@ public class FlutterOverlayWindowPlugin implements
             result.success(OverlayService.moveOverlay(x, y));
         } else if (call.method.equals("getOverlayPosition")) {
             result.success(OverlayService.getCurrentPosition());
+        } else if (call.method.equals("getScreenSize")) {
+            result.success(OverlayService.getScreenSizeDp());
         } else if (call.method.equals("closeOverlay")) {
             if (OverlayService.isRunning) {
                 final Intent i = new Intent(context, OverlayService.class);

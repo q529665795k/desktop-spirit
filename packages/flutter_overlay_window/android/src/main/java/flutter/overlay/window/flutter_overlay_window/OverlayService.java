@@ -279,6 +279,17 @@ public class OverlayService extends Service implements View.OnTouchListener {
         return null;
     }
 
+    /** v0.8.3 漫游:返回屏幕物理尺寸(dp)。未运行时返回 null。 */
+    public static Map<String, Double> getScreenSizeDp() {
+        if (instance != null && instance.mResources != null && instance.szWindow != null) {
+            Map<String, Double> size = new HashMap<>();
+            size.put("width", instance.pxToDp(instance.szWindow.x));
+            size.put("height", instance.pxToDp(instance.szWindow.y));
+            return size;
+        }
+        return null;
+    }
+
     public static boolean moveOverlay(int x, int y) {
         if (instance != null && instance.flutterView != null) {
             if (instance.windowManager != null) {

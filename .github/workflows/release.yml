@@ -28,12 +28,21 @@ jobs:
           rm -rf android
           flutter create --platforms=android --org com.marvis --project-name desktop_spirit .
           cp ci/AndroidManifest.xml android/app/src/main/AndroidManifest.xml
+          # v0.8.3 无障碍服务(吃桌面图标):android 骨架由 flutter create 重建,
+          # 仓库 android/ 下的原生源码会被 rm 删掉,所以服务类 + 无障碍配置放 ci/,
+          # 由 CI 复制进重建后的工程(Manifest 已声明,缺失类会导致构建/运行失败)。
+          mkdir -p android/app/src/main/java/com/marvis/desktop_spirit
+          cp ci/SpiritAccessibilityService.java android/app/src/main/java/com/marvis/desktop_spirit/
+          mkdir -p android/app/src/main/res/xml
+          cp ci/accessibility_service_config.xml android/app/src/main/res/xml/
+          echo "=== SpiritAccessibilityService in place ==="
+          find android/app/src/main -name "SpiritAccessibilityService.java" -o -name "accessibility_service_config.xml"
           echo "=== MainActivity ==="
           find android -name "MainActivity.kt" -o -name "MainActivity.java"
           echo "=== applicationId / namespace ==="
           grep -rE "applicationId|namespace" android/app/build.gradle*
           echo "=== manifest markers ==="
-          grep -E "flutterEmbedding|OverlayService|SYSTEM_ALERT_WINDOW" android/app/src/main/AndroidManifest.xml
+          grep -E "flutterEmbedding|OverlayService|SYSTEM_ALERT_WINDOW|SpiritAccessibilityService|BIND_ACCESSIBILITY" android/app/src/main/AndroidManifest.xml
 
       - name: Resolve packages
         run: |

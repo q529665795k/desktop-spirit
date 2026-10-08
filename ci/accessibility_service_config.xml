@@ -1,0 +1,9 @@
+<?xml version="1.0" encoding="utf-8"?>
+<!-- v0.8.3 桌面灵宠感知服务配置:仅在桌面窗口切换/内容变化时读取图标坐标 -->
+<accessibility-service xmlns:android="http://schemas.android.com/apk/res/android"
+    android:accessibilityEventTypes="typeWindowStateChanged|typeWindowContentChanged"
+    android:accessibilityFeedbackType="feedbackGeneric"
+    android:accessibilityFlags="flagRetrieveInteractiveWindows|flagReportViewIds"
+    android:canRetrieveWindowContent="true"
+    android:description="桌面灵宠自用功能:在桌面上读取应用图标位置,让灵宠能爬过去互动。仅读取坐标,不读取任何文字内容。"
+    android:notificationTimeout="200" />

@@ -156,6 +156,23 @@ class FlutterOverlayWindow {
     return OverlayPosition.fromMap(_res);
   }
 
+  /// v0.8.3 漫游:获取屏幕物理尺寸(dp)。悬浮窗未运行时返回 null。
+  static Future<OverlayScreenSize?> getScreenSize() async {
+    try {
+      final Map<Object?, Object?>? _res = await _channel.invokeMethod(
+        'getScreenSize',
+      );
+      if (_res == null) return null;
+      return OverlayScreenSize(
+        (_res['width'] as num?)?.toDouble() ?? 0,
+        (_res['height'] as num?)?.toDouble() ?? 0,
+      );
+    } on PlatformException catch (e) {
+      log("Error getScreenSize: $e");
+      return null;
+    }
+  }
+
   /// Check if the current overlay is active
   static Future<bool> isActive() async {
     final bool? _res = await _channel.invokeMethod<bool?>('isOverlayActive');

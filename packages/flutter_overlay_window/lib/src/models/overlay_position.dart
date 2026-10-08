@@ -18,3 +18,17 @@ class OverlayPosition {
     return 'OverlayPosition{x=$x, y=$y}';
   }
 }
+
+/// v0.8.3 漫游:屏幕物理尺寸(dp),由悬浮窗服务返回
+@immutable
+class OverlayScreenSize {
+  final double width;
+  final double height;
+
+  const OverlayScreenSize(this.width, this.height);
+
+  @override
+  String toString() {
+    return 'OverlayScreenSize{w=$width, h=$height}';
+  }
+}
