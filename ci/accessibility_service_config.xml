@@ -5,5 +5,5 @@
     android:accessibilityFeedbackType="feedbackGeneric"
     android:accessibilityFlags="flagRetrieveInteractiveWindows|flagReportViewIds"
     android:canRetrieveWindowContent="true"
-    android:description="桌面灵宠自用功能:在桌面上读取应用图标位置,让灵宠能爬过去互动。仅读取坐标,不读取任何文字内容。"
+    android:description="@string/accessibility_service_description"
     android:notificationTimeout="200" />

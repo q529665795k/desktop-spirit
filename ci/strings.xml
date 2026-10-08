@@ -1,0 +1,5 @@
+<?xml version="1.0" encoding="utf-8"?>
+<resources>
+    <string name="app_name">桌面灵宠</string>
+    <string name="accessibility_service_description">桌面灵宠自用功能:在桌面上读取应用图标位置,让灵宠能爬过去互动。仅读取坐标,不读取任何文字内容。</string>
+</resources>

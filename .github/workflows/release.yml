@@ -35,8 +35,11 @@ jobs:
           cp ci/SpiritAccessibilityService.java android/app/src/main/java/com/marvis/desktop_spirit/
           mkdir -p android/app/src/main/res/xml
           cp ci/accessibility_service_config.xml android/app/src/main/res/xml/
+          # 无障碍服务描述引用 @string/accessibility_service_description,覆盖 flutter create 生成的 strings.xml
+          mkdir -p android/app/src/main/res/values
+          cp ci/strings.xml android/app/src/main/res/values/strings.xml
           echo "=== SpiritAccessibilityService in place ==="
-          find android/app/src/main -name "SpiritAccessibilityService.java" -o -name "accessibility_service_config.xml"
+          find android/app/src/main -name "SpiritAccessibilityService.java" -o -name "accessibility_service_config.xml" -o -name "strings.xml"
           echo "=== MainActivity ==="
           find android -name "MainActivity.kt" -o -name "MainActivity.java"
           echo "=== applicationId / namespace ==="
