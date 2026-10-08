@@ -441,6 +441,12 @@ public class OverlayService extends Service implements View.OnTouchListener {
             switch (event.getAction()) {
                 case MotionEvent.ACTION_DOWN:
                     dragging = false;
+                    // 新一次触摸开始:立刻取消未跑完的贴边动画,防止旧动画继续把窗口拉向边缘
+                    // (否则会出现"贴边后自己又动"的错觉)
+                    if (mTrayAnimationTimer != null) {
+                        mTrayAnimationTimer.cancel();
+                        mTrayAnimationTimer = null;
+                    }
                     lastX = event.getRawX();
                     lastY = event.getRawY();
                     // 通知 Flutter 层"用户已触摸",用于唤醒睡眠等
@@ -479,8 +485,11 @@ public class OverlayService extends Service implements View.OnTouchListener {
                     int curLeft = windowLeftPx(params);
                     int curTop = clampTop(windowTopPx(params));
                     int w = flutterView.getWidth();
-                    boolean nearLeft = curLeft < szWindow.x * 0.25;
-                    boolean nearRight = (curLeft + w) > szWindow.x * 0.75;
+                    // 按窗口中心判定贴边:中心进入左/右 1/3 屏幕区域即吸附停靠,
+                    // 否则停在当前位置(旧版用"窗口左缘<25%屏宽",判定过严导致拖到边缘无吸附感)
+                    int centerX = curLeft + w / 2;
+                    boolean nearLeft = centerX < szWindow.x / 3;
+                    boolean nearRight = centerX > szWindow.x * 2 / 3;
                     if (nearLeft || nearRight) {
                         // 靠近左右边缘才吸附停靠,否则停在当前位置
                         lastYPosition = curTop;

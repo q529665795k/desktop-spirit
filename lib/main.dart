@@ -10,7 +10,7 @@ import 'package:flutter_tts/flutter_tts.dart';
 /// 品牌署名
 const String kBrand = '摸鱼基地出品';
 const String kAppName = '桌面灵宠';
-const String kVersion = 'v0.8.1';
+const String kVersion = 'v0.8.2';
 
 /// 预置吐槽短句(第5步会接系统 TTS 语音)
 const List<String> kTaunts = [
@@ -76,6 +76,10 @@ class SpiritTts {
   static Map<String, String>? _maleVoice;
   static Map<String, String>? _femaleVoice;
   static bool _voicesScanned = false;
+
+  /// 已按当前设置应用过一次引擎参数(语速/音色),speak 时不再重复 setVoice/setPitch,
+  /// 避免每次播报都做一次昂贵且易错的设置调用导致丢声/无声
+  static bool _settingsApplied = false;
 
   static Future<void> ensure() async {
     if (_tts != null) return;
@@ -161,6 +165,7 @@ class SpiritTts {
         default:
           await t.setPitch(1.0);
       }
+      _settingsApplied = true;
     } catch (_) {}
   }
 
@@ -169,7 +174,8 @@ class SpiritTts {
     final t = _tts;
     if (t == null || !_ready) return;
     try {
-      await applySettings();
+      // 设置只应用一次,后续纯播报;用户改设置时 _updateTtsRate/_updateTtsVoice 会再调 applySettings
+      if (!_settingsApplied) await applySettings();
       await t.stop();
       // 部分引擎 stop 后立刻 speak 会吞掉第一句,稍等再播
       await Future.delayed(const Duration(milliseconds: 80));
@@ -399,7 +405,7 @@ class HomePage extends StatefulWidget {
   State<HomePage> createState() => _HomePageState();
 }
 
-class _HomePageState extends State<HomePage> {
+class _HomePageState extends State<HomePage> with WidgetsBindingObserver {
   bool _permission = false;
   bool _overlayVisible = false;
   String _status = '检查权限中…';
@@ -469,6 +475,7 @@ class _HomePageState extends State<HomePage> {
 
   @override
   void dispose() {
+    WidgetsBinding.instance.removeObserver(this);
     _actionTimer?.cancel();
     _hatchTimer?.cancel();
     _eggBubbleTimer?.cancel();
@@ -476,8 +483,19 @@ class _HomePageState extends State<HomePage> {
   }
 
   @override
+  void didChangeAppLifecycleState(AppLifecycleState state) {
+    // 破壳后需二次打开修复:主界面与悬浮窗是两个独立 Flutter 引擎,
+    // 悬浮窗破壳只写了 SharedPreferences,主界面内存里 phase 仍是蛋。
+    // 每次切回前台重新读取,破壳后直接完整显示,不用重开软件。
+    if (state == AppLifecycleState.resumed) {
+      _loadPhase();
+    }
+  }
+
+  @override
   void initState() {
     super.initState();
+    WidgetsBinding.instance.addObserver(this);
     _checkPermission();
     _loadPhase();
     SpiritState.load().then((_) {
@@ -568,12 +586,12 @@ class _HomePageState extends State<HomePage> {
 
   void _onHatchComplete() {
     _hatchTimer?.cancel();
-    _eggBubbleTimer?.cancel();
     setState(() {
       _phase = SpiritPhase.spirit;
-      _eggBubble = null;
     });
     SpiritStore.save(SpiritPhase.spirit);
+    // 破壳后立刻弹欢迎语,修复"破壳后文字显示不全/被遮"
+    _showEggBubble(kSpiritTaunts.first, seconds: 4);
     SpiritTts.speak(kSpiritTaunts.first);
   }
 
@@ -1071,10 +1089,10 @@ class _SpriteAnimState extends State<SpriteAnim>
   @override
   void didUpdateWidget(covariant SpriteAnim oldWidget) {
     super.didUpdateWidget(oldWidget);
-    // 关键修复:dir 切换(如 idle→sleep、egg→idle)必须重算帧数与整轮时长,
-    // 否则 _frames 停留在旧值,会取到不存在的帧(如 sleep_05/idle_06~11),
-    // 表现为睡眠闪烁、破壳后显示不全、需要二次打开才正常。
-    if (oldWidget.dir != widget.dir) {
+    // 关键修复:dir 或 fps 切换(如 idle→sleep、eat→idle、fps 6→2)必须重算帧数与整轮时长,
+    // 否则 _frames/duration 停留在旧值,会取到不存在的帧(如 sleep_05/idle_06~11),
+    // 表现为睡眠闪烁、破壳后显示不全、轮播取帧乱序、需要二次打开才正常。
+    if (oldWidget.dir != widget.dir || oldWidget.fps != widget.fps) {
       _frames = _counts[widget.dir] ?? 1;
       _c.duration = _durationFor();
       _c.value = 0;
@@ -1212,7 +1230,8 @@ class _SpiritAvatarState extends State<SpiritAvatar>
         builder: (context, child) {
           final t = _idle.value;
           final isAction = action != null;
-          // 睡眠时:安安静静趴着——关闭上下浮动与呼吸缩放,素材用低 fps 缓慢循环
+          // 睡眠时:安安静静趴着——关闭上下浮动,静态展示最安静的"团球+Z"帧,
+          // 只保留极轻微呼吸(旧版轮播 4 帧含"跪坐"帧,低 fps 循环看起来像反复坐起/站起)
           final isSleeping = widget.sleep && dir == 'sleep';
           return Transform.translate(
             offset: Offset(0, (isAction || isSleeping) ? 0 : -t * 6),
@@ -1221,10 +1240,20 @@ class _SpiritAvatarState extends State<SpiritAvatar>
               child: SizedBox(
                 width: s,
                 height: s * 1.15,
-                child: SpriteAnim(
-                  dir: dir,
-                  fps: isSleeping ? 2 : (dir == 'talk' || dir == 'angry' ? 5 : 6),
-                ),
+                child: isSleeping
+                    ? Transform.scale(
+                        scale: 1 + t * 0.015,
+                        child: Image.asset(
+                          'assets/sleep/sleep_02.png',
+                          fit: BoxFit.contain,
+                          gaplessPlayback: true,
+                          errorBuilder: (_, __, ___) => const SizedBox.shrink(),
+                        ),
+                      )
+                    : SpriteAnim(
+                        dir: dir,
+                        fps: dir == 'talk' || dir == 'angry' ? 5 : 6,
+                      ),
               ),
             ),
           );
@@ -1737,7 +1766,9 @@ class _SpiritOverlayState extends State<SpiritOverlay>
       if (mounted) setState(() => _bubble = null);
     });
     await FlutterOverlayWindow.resizeOverlay(_miniW.toInt(), _miniH.toInt(), true);
-    await FlutterOverlayWindow.moveOverlay(const OverlayPosition(0, 160));
+    // 贴边后自动回中间修复:gravity=CENTER 时 params.x 是相对屏幕中心的偏移,
+    // x=0 会把窗口水平居中;这里用 15% 窗口宽(76×0.15≈11dp)让迷你窗贴住屏幕左缘
+    await FlutterOverlayWindow.moveOverlay(OverlayPosition((_miniW * 0.15).round(), 160));
   }
 
   Future<void> _restore() async {
@@ -1962,21 +1993,34 @@ class _SpiritOverlayState extends State<SpiritOverlay>
     required VoidCallback onTap,
     required String emoji,
     required double s,
+    String? label,
     bool danger = false,
   }) {
     return GestureDetector(
       onTap: onTap,
       child: Container(
         width: s,
-        height: s,
+        height: label == null ? s : s + 14,
         margin: const EdgeInsets.symmetric(horizontal: 3),
         alignment: Alignment.center,
         decoration: BoxDecoration(
-          color: danger ? Colors.white.withOpacity(0.95) : Colors.white.withOpacity(0.95),
-          shape: BoxShape.circle,
+          color: Colors.white.withOpacity(0.95),
+          shape: label == null ? BoxShape.circle : BoxShape.rectangle,
+          borderRadius: label == null ? null : BorderRadius.circular(10),
           border: Border.all(color: danger ? Colors.redAccent : Colors.black12),
         ),
-        child: Text(emoji, style: TextStyle(fontSize: s * 0.62)),
+        // emoji 在部分系统字体缺失时渲染为空白,补文字标签兜底,保证按钮永远可读
+        child: label == null
+            ? Text(emoji, style: TextStyle(fontSize: s * 0.62))
+            : Column(
+                mainAxisSize: MainAxisSize.min,
+                children: [
+                  Text(emoji, style: TextStyle(fontSize: s * 0.5)),
+                  const SizedBox(height: 1),
+                  Text(label,
+                      style: const TextStyle(fontSize: 9, color: Colors.black87)),
+                ],
+              ),
       ),
     );
   }
@@ -2127,9 +2171,9 @@ class _SpiritOverlayState extends State<SpiritOverlay>
                     top: foodTop,
                     child: Row(
                       children: [
-                        for (final f in kFoods) _roundBtn(onTap: () => _feed(f), emoji: f.emoji, s: btnSize),
-                        _roundBtn(onTap: _pet, emoji: '💗', s: btnSize),
-                        _roundBtn(onTap: _goMini, emoji: '🫥', s: btnSize, danger: true),
+                        for (final f in kFoods) _roundBtn(onTap: () => _feed(f), emoji: f.emoji, label: f.name, s: btnSize),
+                        _roundBtn(onTap: _pet, emoji: '💗', label: '摸摸', s: btnSize),
+                        _roundBtn(onTap: _goMini, emoji: '🫥', label: '收起', s: btnSize, danger: true),
                       ],
                     ),
                   ),
