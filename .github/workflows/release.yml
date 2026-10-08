@@ -56,10 +56,10 @@ jobs:
           flutter build bundle --debug
           # 1) Dart 代码必须真的编译出 kernel_blob.bin
           test -s build/flutter_assets/kernel_blob.bin && echo "OK kernel_blob.bin present"
-          # 2) 66 张 PNG 必须全部进 bundle
+          # 2) 58 张 PNG 必须全部进 bundle（egg 由 11 张残次图替换为 3 张关键帧素材）
           PNG=$(find build/flutter_assets/assets -type f -name '*.png' | wc -l | tr -d ' ')
           echo "bundle PNG count = $PNG"
-          test "$PNG" -eq 66
+          test "$PNG" -eq 58
           # 3) AssetManifest 不得为空 {}，且能索引到蛋帧
           grep -q "egg_01" build/flutter_assets/AssetManifest.json
           echo "OK AssetManifest non-empty"
@@ -75,10 +75,10 @@ jobs:
           unzip -l "$APK" > /tmp/apk.txt
           # release 下 Dart 走 AOT，必须有 libapp.so，否则就是空壳
           grep -q "libapp.so" /tmp/apk.txt && echo "OK libapp.so (AOT) present"
-          # flutter_assets 里 66 张 PNG 必须在
+          # flutter_assets 里 58 张 PNG 必须在
           PNG=$(grep -cE "flutter_assets/.*\.png" /tmp/apk.txt || true)
           echo "APK PNG count = $PNG"
-          test "$PNG" -eq 66
+          test "$PNG" -eq 58
           grep -q "egg_01" /tmp/apk.txt && echo "OK egg frame packaged"
 
           # 悬浮窗自检:OverlayService 真实类必须打进 dex。

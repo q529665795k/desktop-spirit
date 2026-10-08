@@ -10,7 +10,7 @@ import 'package:flutter_tts/flutter_tts.dart';
 /// 品牌署名
 const String kBrand = '摸鱼基地出品';
 const String kAppName = '桌面灵宠';
-const String kVersion = 'v0.8.0';
+const String kVersion = 'v0.8.1';
 
 /// 预置吐槽短句(第5步会接系统 TTS 语音)
 const List<String> kTaunts = [
@@ -1033,7 +1033,7 @@ class _SpriteAnimState extends State<SpriteAnim>
   late int _frames;
 
   static const Map<String, int> _counts = {
-    'egg': 11,
+    'egg': 3,
     'idle': 5,
     'eat': 5,
     'happy': 3,
@@ -1233,16 +1233,18 @@ class _SpiritAvatarState extends State<SpiritAvatar>
     }
 
     if (_hatching) {
-      // 破壳动画:蛋震 → 裂纹 → 闪光 → 蹦出小精灵(真实素材)
+      // 破壳动画:蛋震 → 裂纹 → 闪光 → 蹦出小精灵(3 张关键帧素材)
+      // 关键帧映射: t<0.45 完好蛋(egg_01) / 0.45~0.75 裂纹蛋(egg_02) / ≥0.75 破壳蛋(egg_03)
       return AnimatedBuilder(
         animation: _hatch,
         builder: (context, child) {
           final t = _hatch.value;
-          final shake = t < 0.3 ? math.sin(t * 60) * 6 * (1 - t) : 0.0;
-          final flash = t >= 0.35 && t <= 0.55
-              ? (1 - (t - 0.35) / 0.2).clamp(0.0, 1.0)
+          final shake = t < 0.45 ? math.sin(t * 60) * 6 * (1 - t / 0.45) : 0.0;
+          final flash = t >= 0.45 && t <= 0.7
+              ? (1 - (t - 0.45) / 0.25).clamp(0.0, 1.0)
               : 0.0;
-          final pop = t >= 0.55 ? ((t - 0.55) / 0.3).clamp(0.0, 1.0) : 0.0;
+          final pop = t >= 0.75 ? ((t - 0.75) / 0.25).clamp(0.0, 1.0) : 0.0;
+          final eggIdx = t < 0.45 ? 1 : (t < 0.75 ? 2 : 3);
 
           return Stack(
             alignment: Alignment.center,
@@ -1257,14 +1259,14 @@ class _SpiritAvatarState extends State<SpiritAvatar>
                     color: Colors.white.withOpacity(flash * 0.9),
                   ),
                 ),
-              // 蛋:按破壳进度切帧(11帧蛋序列:完整→裂纹→发光)
+              // 蛋:按破壳进度切 3 张关键帧(完好蛋→裂纹蛋→破壳蛋)
               Transform.translate(
                 offset: Offset(shake, 0),
                 child: SizedBox(
                   width: s,
                   height: s * 1.15,
                   child: Image.asset(
-                    'assets/egg/egg_${((t * 10).floor().clamp(0, 10) + 1).toString().padLeft(2, '0')}.png',
+                    'assets/egg/egg_${eggIdx.toString().padLeft(2, '0')}.png',
                     fit: BoxFit.contain,
                     gaplessPlayback: true,
                     errorBuilder: (_, __, ___) => const SizedBox.shrink(),
