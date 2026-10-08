@@ -1768,7 +1768,7 @@ class _SpiritOverlayState extends State<SpiritOverlay>
     await FlutterOverlayWindow.resizeOverlay(_miniW.toInt(), _miniH.toInt(), true);
     // 贴边后自动回中间修复:gravity=CENTER 时 params.x 是相对屏幕中心的偏移,
     // x=0 会把窗口水平居中;这里用 15% 窗口宽(76×0.15≈11dp)让迷你窗贴住屏幕左缘
-    await FlutterOverlayWindow.moveOverlay(OverlayPosition((_miniW * 0.15).round(), 160));
+    await FlutterOverlayWindow.moveOverlay(OverlayPosition(_miniW * 0.15, 160));
   }
 
   Future<void> _restore() async {
