@@ -246,6 +246,18 @@ class SpiritStore {
   }
 }
 
+/// v0.9.0: 跨引擎动作分发通道（主界面 ↔ 悬浮窗）
+class OverlayActionChannel {
+  static void send(String action, {int duration = 1600}) {
+    FlutterOverlayWindow.shareData(jsonEncode({
+      'action': action,
+      'duration': duration,
+      'ts': DateTime.now().millisecondsSinceEpoch,
+    }));
+  }
+}
+
+
 /// 孵化期(蛋形态 5 分钟)互动调度:里程碑倒计时台词 + 撒娇喊饿。
 /// 主界面与悬浮窗各自持有定时器、各自调用(二者是独立引擎,静态状态不共享,互不影响)。
 class HatchChatter {
@@ -1494,6 +1506,8 @@ class _SpiritAvatarState extends State<SpiritAvatar>
       String dir = 'idle';
       if (action != null) {
         dir = action;
+      } else if (widget.evo && widget.sleep) {
+        dir = 'final_sleep';
       } else if (widget.evo) {
         dir = 'final';
       } else if (widget.sleep) {
@@ -2274,6 +2288,20 @@ class _SpiritOverlayState extends State<SpiritOverlay>
         petTouch = event['petTouch'] == true;
       }
     } catch (_) {}
+    // v0.9.0: 处理主界面分发的动作指令
+    if (event is String) {
+      try {
+        final m = jsonDecode(event);
+        if (m is Map) {
+          if (m['action'] != null) {
+            _playAction(m['action'] as String, (m['duration'] as num?)?.toInt() ?? 1600);
+          }
+          if (m['hatchComplete'] == true) {
+            if (mounted) setState(() => _phase = SpiritPhase.spirit);
+          }
+        }
+      } catch (_) {}
+    }
     if (petTouch) {
       _wake();
     }
@@ -2425,6 +2453,7 @@ class _SpiritOverlayState extends State<SpiritOverlay>
   /// 单击:摸头(第一反应)
   Future<void> _pet() async {
     _touchAndReset();
+    _sleepTimer?.cancel(); _startSleepWatch();  // v0.9.0: 交互复位睡眠倒计时
     SpiritState.mood = math.min(100, SpiritState.mood + 10);
     SpiritState.bump(2); // v0.8.3 成长:互动加亲密度
     await SpiritState.save();
@@ -2440,6 +2469,7 @@ class _SpiritOverlayState extends State<SpiritOverlay>
 
   Future<void> _feed(Food food) async {
     _touchAndReset();
+    _sleepTimer?.cancel(); _startSleepWatch();  // v0.9.0: 交互复位睡眠倒计时
     SpiritState.satiety = math.min(100, SpiritState.satiety + food.satiety);
     SpiritState.mood = math.min(100, SpiritState.mood + food.mood);
     SpiritState.feedCount++;
@@ -2466,6 +2496,7 @@ class _SpiritOverlayState extends State<SpiritOverlay>
     await SpiritState.save();
     if (!mounted) return;
     _playAction('evolve', 2200);
+    OverlayActionChannel.send('evolve', duration: 2200);  // v0.9.0: 同步给悬浮窗
     _bubbleTimer?.cancel();
     setState(() {
       _evolving = true;
@@ -2484,6 +2515,7 @@ class _SpiritOverlayState extends State<SpiritOverlay>
     _hatchTimer?.cancel();
     setState(() => _phase = SpiritPhase.spirit);
     SpiritStore.save(SpiritPhase.spirit);
+    OverlayActionChannel.send('hatchComplete');  // v0.9.0: 同步悬浮窗破壳状态
     _bubbleTimer?.cancel();
     // v0.8.3 时间感知:破壳后先按时段打招呼
     final greeting = _timeGreeting();
