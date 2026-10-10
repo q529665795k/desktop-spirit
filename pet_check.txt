@@ -1,0 +1,108 @@
+可用工具完整清单：
+
+文件与目录操作：
+- read_file: 读取文件内容（支持文本、PDF、图片、音频、Office文档等）
+- write_file: 创建新文件或全量重写文件
+- edit_file: 精确编辑文件（replace_block、insert_after、insert_before、delete_block、append_line）
+- list_directory: 列出目录树结构
+- copy_file: 复制文件或目录
+- grep_search: 搜索文件内容或文件名（ripgrep）
+- find_file_conversations: 查找与文件关联的历史对话
+- read_file_conversation_context: 读取特定对话的上下文
+
+Shell 命令：
+- bash: 执行单条 shell 命令
+
+Web 搜索与浏览：
+- web_search: 通用网页搜索
+- web_research: 深度网页研究
+- read_webpage: 读取网页内容（可选使用浏览器）
+- open_webpage: 在 Zo 浏览器中打开网页
+- view_webpage: 查看当前浏览器页面内容+截图
+- use_webpage: 与当前页面交互（点击、填表、滚动等）
+- find_similar_links: 查找相似网页
+- save_webpage: 保存网页到 Articles 目录
+- image_search: 图片搜索
+- x_search: X (Twitter) 搜索
+
+媒体生成：
+- generate_image: 生成图片
+- edit_image: 编辑/合成图片
+- generate_video: 生成视频
+- generate_speech: 生成语音
+- generate_d2_diagram: 生成 D2 图表
+- transcribe_audio: 转录音频
+- transcribe_video: 转录视频
+
+邮件与通讯：
+- send_email_to_user: 发送邮件给用户
+- connect_telegram: 生成 Telegram 配对码
+
+自动化与 Agent：
+- create_automation: 创建定时自动化任务
+- edit_automation: 编辑自动化
+- delete_automation: 删除自动化
+- list_automations: 列出所有自动化
+- get_automation: 获取自动化详情
+- create_agent: 创建 Agent（别名 create_automation）
+- edit_agent: 编辑 Agent
+- delete_agent: 删除 Agent
+- list_agents: 列出所有 Agent
+
+Zo Space（个人网站）：
+- write_space_route: 创建或全量重写路由
+- edit_space_route: 编辑现有路由（推荐）
+- delete_space_route: 删除路由
+- list_space_routes: 列出所有路由
+- get_space_route: 获取路由详情（含代码）
+- get_space_route_history: 查看路由版本历史
+- undo_space_route: 撤销路由更改
+- redo_space_route: 重做路由更改
+- update_space_asset: 上传静态资源
+- delete_space_asset: 删除静态资源
+- list_space_assets: 列出所有静态资源
+- get_space_errors: 获取路由错误日志
+- restart_space_server: 重启 Space 服务
+- get_space_settings: 获取 Space 设置
+- update_space_settings: 更新 Space 设置
+
+Zo Sites（独立站点）：
+- create_website: 创建站点
+- publish_site: 发布/重新发布站点
+- unpublish_site: 取消发布站点
+
+Persona 与规则：
+- create_persona: 创建 Persona
+- edit_persona: 编辑 Persona
+- delete_persona: 删除 Persona
+- list_personas: 列出所有 Persona
+- set_active_persona: 设置当前频道的活跃 Persona
+- list_available_scopes: 列出可用工具权限作用域
+- set_persona_scopes: 设置 Persona 的工具权限
+- create_rule: 创建用户规则
+- edit_rule: 编辑规则
+- delete_rule: 删除规则
+- list_rules: 列出所有规则
+- update_user_settings: 更新用户设置（名称/简介）
+
+集成与外部应用：
+- connect_integration: 连接 OAuth 集成（内联 Connect 按钮）
+- open_mcp_app: 打开交互式 MCP App
+- call_mcp_tool: 调用 MCP 服务器工具
+- list_app_tools: 列出已连接应用的可用工具
+- search_app_catalog: 搜索 Pipedream 应用目录
+- proxy_local_service: 代理本地服务到公网端点
+- register_user_service: 注册托管用户服务
+- update_user_service: 更新用户服务
+- delete_user_service: 删除用户服务
+- list_user_services: 列出用户服务
+- service_doctor: 诊断服务状态
+
+工具文档：
+- tool_docs: 查看特定工具的详细文档
+
+地图搜索：
+- maps_search: Google Maps 位置搜索
+
+Zo API 调用：
+- 可通过 bash 调用 /zo/ask API（需 ZO_CLIENT_IDENTITY_TOKEN）

@@ -1,0 +1,28 @@
+name: flutter_overlay_window
+description: A Flutter plugin for creating overlay windows on desktop platforms.
+version: 0.1.0
+publish_to: 'none'
+
+environment:
+  sdk: '>=3.0.0 <4.0.0'
+  flutter: ">=3.3.0"
+
+dependencies:
+  flutter:
+    sdk: flutter
+
+dev_dependencies:
+  flutter_test:
+    sdk: flutter
+  flutter_lints: ^3.0.0
+
+flutter:
+  plugin:
+    platforms:
+      windows:
+        pluginClass: FlutterOverlayWindowPlugin
+      linux:
+        pluginClass: FlutterOverlayWindowPlugin
+        default_package: flutter_overlay_window
+      macos:
+        pluginClass: FlutterOverlayWindowPlugin
